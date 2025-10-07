@@ -1,0 +1,10 @@
+# Ignore local config with secrets
+config.js
+
+# Node artifacts (if any)
+node_modules/
+
+# OS / editor
+.DS_Store
+.vscode/
+Thumbs.db
