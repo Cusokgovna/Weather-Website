@@ -1,4 +1,4 @@
-name: Build and deploy
+name: Build and deploy (clean)
 
 permissions:
   contents: write
@@ -15,7 +15,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Create config.js from secret (for deploy)
+      - name: Create config.js from secret
         env:
           OPENWEATHER_KEY: ${{ secrets.OPENWEATHER_KEY }}
         run: |
@@ -23,16 +23,20 @@ jobs:
             echo "window.CONFIG = { OPENWEATHER_KEY: \"$OPENWEATHER_KEY\" };" > ./deploy_config.js
           fi
 
-      - name: Prepare deploy directory (single-line)
-        run: mkdir -p out && git ls-files -z | tar --null -T - -cf tracked.tar && tar -xf tracked.tar -C out && rm tracked.tar && test -f ./deploy_config.js && mv ./deploy_config.js out/config.js || true
+      - name: Prepare out
+        run: |
+          mkdir -p out
+          git ls-files -z | tar --null -T - -cf tracked.tar
+          tar -xf tracked.tar -C out
+          rm tracked.tar
+          if [ -f ./deploy_config.js ]; then mv ./deploy_config.js out/config.js; fi
 
-      - name: Debug list out/
-        run: ls -la out || true
+      - name: Debug
+        run: |
+          ls -la out || true
+          if [ -f out/config.js ]; then head -n 20 out/config.js; fi
 
-      - name: Debug head of config.js
-        run: test -f out/config.js && head -n 50 out/config.js || echo "no config.js"
-
-      - name: Deploy to GitHub Pages
+      - name: Deploy
         uses: peaceiris/actions-gh-pages@v3
         with:
           personal_token: ${{ secrets.GH_PAGES_PAT }}

@@ -1,4 +1,4 @@
-name: Build and deploy
+name: Build and deploy (full)
 
 permissions:
   contents: write
@@ -23,14 +23,20 @@ jobs:
             echo "window.CONFIG = { OPENWEATHER_KEY: \"$OPENWEATHER_KEY\" };" > ./deploy_config.js
           fi
 
-      - name: Prepare deploy directory (single-line)
-        run: mkdir -p out && git ls-files -z | tar --null -T - -cf tracked.tar && tar -xf tracked.tar -C out && rm tracked.tar && test -f ./deploy_config.js && mv ./deploy_config.js out/config.js || true
+      - name: Prepare deploy directory (copy tracked files only)
+        run: |
+          mkdir -p out
+          git ls-files -z | tar --null -T - -cf tracked.tar
+          tar -xf tracked.tar -C out
+          rm tracked.tar
+          if [ -f ./deploy_config.js ]; then mv ./deploy_config.js out/config.js; fi
 
-      - name: Debug list out/
-        run: ls -la out || true
-
-      - name: Debug head of config.js
-        run: test -f out/config.js && head -n 50 out/config.js || echo "no config.js"
+      - name: Debug: show out/ contents
+        run: |
+          echo "--- listing out/ ---"
+          ls -la out || true
+          echo "--- head of out/config.js (if exists) ---"
+          if [ -f out/config.js ]; then head -n 50 out/config.js; else echo "no config.js"; fi
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
@@ -39,4 +45,6 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./out
           publish_branch: gh-pages
+          user_name: 'github-actions[bot]'
+          user_email: 'github-actions[bot]@users.noreply.github.com'
           allow_empty_commit: true

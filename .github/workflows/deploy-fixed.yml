@@ -1,4 +1,4 @@
-name: Build and deploy
+name: Build and deploy (fixed)
 
 permissions:
   contents: write
@@ -19,9 +19,7 @@ jobs:
         env:
           OPENWEATHER_KEY: ${{ secrets.OPENWEATHER_KEY }}
         run: |
-          if [ -n "$OPENWEATHER_KEY" ]; then
-            echo "window.CONFIG = { OPENWEATHER_KEY: \"$OPENWEATHER_KEY\" };" > ./deploy_config.js
-          fi
+          test -n "$OPENWEATHER_KEY" && echo "window.CONFIG = { OPENWEATHER_KEY: \"$OPENWEATHER_KEY\" };" > ./deploy_config.js || true
 
       - name: Prepare deploy directory (single-line)
         run: mkdir -p out && git ls-files -z | tar --null -T - -cf tracked.tar && tar -xf tracked.tar -C out && rm tracked.tar && test -f ./deploy_config.js && mv ./deploy_config.js out/config.js || true
