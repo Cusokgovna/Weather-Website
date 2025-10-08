@@ -1,10 +1,16 @@
-# Ignore local config with secrets
-config.js
+# yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
+name: Build and deploy
 
-# Node artifacts (if any)
-node_modules/
-
-# OS / editor
+on:ode artifacts (if any)
+  push:dules/
+    branches: [ main, master, weather ]
+  workflow_dispatch: {}
 .DS_Store
-.vscode/
-Thumbs.db
+jobs:de/
+  build-deploy:
+    runs-on: ubuntu-latest    steps:      - name: Checkout        uses: actions/checkout@v4      - name: Create config.js from secret (for deploy)        env:          OPENWEATHER_KEY: ${{ secrets.OPENWEATHER_KEY }}        run: |          # Create deploy_config.js only when OPENWEATHER_KEY is supplied via secrets          if [ -n "$OPENWEATHER_KEY" ]; then            echo "window.CONFIG = { OPENWEATHER_KEY: \"$OPENWEATHER_KEY\" };" > ./deploy_config.js          fi      - name: Prepare deploy directory (copy tracked files only)        run: |          mkdir -p out          # Create a tarball of tracked files only (avoids node_modules, .git, etc.)          git ls-files -z | tar --null -T - -cf tracked.tar          tar -xf tracked.tar -C out          rm tracked.tar          # move deploy_config.js into out as config.js so it is published          if [ -f ./deploy_config.js ]; then mv ./deploy_config.js out/config.js; fi      - name: Deploy to GitHub Pages        uses: peaceiris/actions-gh-pages@v3        with:          github_token: ${{ secrets.GITHUB_TOKEN }}          publish_dir: ./out          publish_branch: gh-pages
+{
+  "yaml.schemas": {
+    "https://json.schemastore.org/github-workflow.json": ".github/workflows/*"
+  }
+}
