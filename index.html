@@ -1,0 +1,168 @@
+<!doctype html>
+  <html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Weather — fast & convenient</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://openweathermap.org">
+  <link rel="dns-prefetch" href="https://openweathermap.org">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="container">
+  <button class="burger" id="burger" aria-label="Open menu" aria-expanded="false" aria-controls="mobileNav">
+    <span></span><span></span><span></span>
+  </button>
+  <h1>Weather</h1>
+  <nav class="nav-desktop" aria-label="Main navigation">
+    <ul class="menu">
+  <li><a href="./index.html#main">Home</a></li>
+      <li class="has-dropdown">
+  <button class="dropdown-toggle" id="moreMenuBtn" aria-expanded="false" aria-controls="dropdownMore">Menu ▾</button>
+  <ul id="dropdownMore" class="dropdown" role="menu" aria-label="More">
+          <li><a href="./faq.html" role="menuitem">FAQ</a></li>
+          <li><a href="./profile.html" role="menuitem">Profile</a></li>
+          <li><button id="openAuth" role="menuitem">Sign in / Register</button></li>
+          <li><button id="clearCache" role="menuitem">Clear cache</button></li>
+        </ul>
+      </li>
+    </ul>
+  </nav>
+  <div class="controls">
+    <div class="search">
+      <input id="q" type="text" placeholder="City or place…" autocomplete="off" />
+      <div id="suggestions" class="suggestions"></div>
+    </div>
+    <button id="useLocation">My location</button>
+    <button id="toggleTheme" title="Toggle light/dark">🌓</button>
+  <img id="headerAvatar" class="header-avatar" src="" alt="" style="display:none" />
+  <button id="profileBtn" class="profile-btn" type="button" aria-haspopup="menu" aria-expanded="false">Guest</button>
+    <ul id="profileMenu" class="dropdown right" role="menu" aria-label="Profile">
+      <li><a href="./profile.html" role="menuitem">Profile</a></li>
+      <li><button id="openAuth2" role="menuitem">Sign in / Register</button></li>
+      <li><button id="logout" role="menuitem">Log out</button></li>
+    </ul>
+  </div>
+</header>
+
+<!-- Mobile navigation -->
+<nav id="mobileNav" class="mobile-nav" aria-label="Mobile navigation">
+  <ul>
+  <li><a href="./index.html#main" onclick="document.getElementById('burger').click()">Home</a></li>
+  <li><a href="./faq.html" onclick="document.getElementById('burger').click()">FAQ</a></li>
+  <li><a href="./profile.html" onclick="document.getElementById('burger').click()">Profile</a></li>
+  <li><button id="openAuthMobile">Sign in / Register</button></li>
+  </ul>
+</nav>
+
+
+  <main class="container">
+    <section id="status" class="status"></section>
+
+  <section id="current" class="card">
+      <div class="card-header">
+        <h2 id="place">—</h2>
+        <div class="card-actions">
+          <button id="favToggle" class="btn-like" title="Add to favorites" aria-pressed="false">☆</button>
+          <span id="updated">—</span>
+        </div>
+      </div>
+      <div class="current-wrap skeleton">
+        <div class="temp" id="temp">—°</div>
+        <div class="meta">
+          <div id="desc">—</div>
+          <div class="grid2">
+            <div>Feels like: <b id="feels">—</b></div>
+            <div>Wind: <b id="wind">—</b></div>
+            <div>Humidity: <b id="humidity">—</b></div>
+            <div>Pressure: <b id="pressure">—</b></div>
+          </div>
+        </div>
+        <img id="icon" alt="" loading="lazy" decoding="async" />
+      </div>
+    </section>
+
+    <section class="card">
+      <h3>Next 24 hours</h3>
+      <div id="hourly" class="hourly skeleton"></div>
+      <canvas id="hourlyChart" width="800" height="160" style="width:100%;height:160px;margin-top:10px"></canvas>
+    </section>
+
+    <section class="card">
+      <h3>Next 7 days</h3>
+      <div id="daily" class="daily skeleton"></div>
+    </section>
+
+    <section class="card">
+      <h3>Air quality (AQI)</h3>
+      <div id="aqi" class="aqi skeleton">—</div>
+    </section>
+  </main>
+
+  <!-- Auth modal (login/register) -->
+  <div id="authModal" class="modal" aria-hidden="true" aria-labelledby="authTitle" role="dialog">
+    <div class="modal-backdrop" data-close="authModal"></div>
+    <div class="modal-content" role="document">
+      <div class="modal-header">
+        <h3 id="authTitle">Account</h3>
+        <button class="modal-close" data-close="authModal" aria-label="Close">✕</button>
+      </div>
+      <div class="tabs" role="tablist">
+        <button class="tab active" data-tab="login" role="tab" aria-selected="true">Sign in</button>
+        <button class="tab" data-tab="register" role="tab">Sign up</button>
+      </div>
+      <div class="tab-panels">
+        <form id="loginForm" class="form panel active" novalidate>
+          <div class="field">
+            <label for="loginEmail">Email</label>
+            <input id="loginEmail" name="email" type="email" required placeholder="you@example.com" autocomplete="email" />
+            <small class="error"></small>
+          </div>
+          <div class="field">
+            <label for="loginPassword">Password</label>
+            <input id="loginPassword" name="password" type="password" required minlength="6" placeholder="••••••••" autocomplete="current-password" />
+            <small class="error"></small>
+          </div>
+          <button class="btn-primary" type="submit">Sign in</button>
+        </form>
+
+        <form id="registerForm" class="form panel" novalidate>
+          <div class="field">
+            <label for="regName">Name</label>
+            <input id="regName" name="name" type="text" required minlength="2" placeholder="Your name" autocomplete="name" />
+            <small class="error"></small>
+          </div>
+          <div class="field">
+            <label for="regEmail">Email</label>
+            <input id="regEmail" name="email" type="email" required placeholder="you@example.com" autocomplete="email" />
+            <small class="error"></small>
+          </div>
+          <div class="field">
+            <label for="regPassword">Password</label>
+            <input id="regPassword" name="password" type="password" required minlength="6" placeholder="At least 6 characters" autocomplete="new-password" />
+            <small class="error"></small>
+          </div>
+          <div class="field">
+            <label for="regConfirm">Confirm password</label>
+            <input id="regConfirm" name="confirm" type="password" required minlength="6" placeholder="Repeat password" autocomplete="new-password" />
+            <small class="error"></small>
+          </div>
+          <button class="btn-primary" type="submit">Create account</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <footer class="container muted">
+    Made by Zhanakhmet Abdulaziz and Tauken Ruslan. <code></code>
+  </footer>
+
+  <script src="./config.js"></script>
+  <script src="./toasts.js"></script>
+  <script type="module" src="./app.js"></script>
+
+</body>
+</html>

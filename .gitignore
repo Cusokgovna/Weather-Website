@@ -1,0 +1,12 @@
+# Node modules and OS files
+node_modules/
+.DS_Store
+
+# Local config (keep keys out of the repo)
+config.js
+
+# Build output
+out/
+
+# VS Code
+.vscode/
