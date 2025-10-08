@@ -22,10 +22,13 @@ jobs:
             echo "window.CONFIG = { OPENWEATHER_KEY: \"$OPENWEATHER_KEY\" };" > ./deploy_config.js
           fi
 
-      - name: Prepare deploy directory
+      - name: Prepare deploy directory (copy tracked files only)
         run: |
           mkdir -p out
-          cp -r ./* out/ || true
+          # Create a tarball of tracked files only (avoids node_modules, .git, etc.)
+          git ls-files -z | tar --null -T - -cf tracked.tar
+          tar -xf tracked.tar -C out
+          rm tracked.tar
           # move deploy_config.js into out as config.js so it is published
           if [ -f ./deploy_config.js ]; then mv ./deploy_config.js out/config.js; fi
 
