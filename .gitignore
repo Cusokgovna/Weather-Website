@@ -1,12 +1,18 @@
-# Node modules and OS files
+# Dependencies
 node_modules/
-.DS_Store
 
-# Local config (keep keys out of the repo)
+# Secrets: real passwords and API keys live only in .env (see .env.example)
+.env
+.env.*
+!.env.example
+
+# Old client-side config with an API key — no longer used, never commit it
 config.js
 
-# Build output
-out/
-
-# VS Code
-.vscode/
+# Logs, OS and editor files
+npm-debug.log*
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/settings.json
+.idea/
