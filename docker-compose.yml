@@ -1,0 +1,15 @@
+# Website only. SQL Server runs on your computer (installed SQL Server + SSMS).
+# In .env set DB_SERVER=host.docker.internal
+#   docker compose up --build
+services:
+  web:
+    build: .
+    image: weather-website:local
+    env_file: .env
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      PORT: 3000
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped

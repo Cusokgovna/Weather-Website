@@ -1,0 +1,27 @@
+# Dependencies are installed inside the image (npm ci)
+node_modules
+npm-debug.log*
+
+# Secrets and local configs — must never get into the image
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Git, CI, editor and OS files
+.git
+.gitignore
+.github
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+
+# Not needed to run the app
+tests
+docs
+README.md
+docker-compose*.yml
+Dockerfile
+.dockerignore

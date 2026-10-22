@@ -1,0 +1,116 @@
+name: Test, build and publish Docker image
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # 1. Unit/API tests on the in-memory repository (no database needed)
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+  # 2. The same API tests against a real Microsoft SQL Server 2022 created from database/*.sql
+  db-test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Start SQL Server 2022 (temporary container, random password)
+        run: |
+          DB_PASSWORD="Ci-$(openssl rand -hex 12)-Aa1!"
+          echo "::add-mask::$DB_PASSWORD"
+          echo "DB_PASSWORD=$DB_PASSWORD" >> "$GITHUB_ENV"
+          docker run -d --name mssql -e ACCEPT_EULA=Y -e "MSSQL_SA_PASSWORD=$DB_PASSWORD" \
+            -p 1433:1433 mcr.microsoft.com/mssql/server:2022-latest
+          for i in $(seq 1 40); do
+            if docker exec mssql /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$DB_PASSWORD" -C -Q "SELECT 1" > /dev/null 2>&1; then
+              echo "SQL Server is ready"; exit 0
+            fi
+            sleep 3
+          done
+          docker logs mssql
+          exit 1
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create database from database/*.sql
+        run: npm run db:init
+        env:
+          DB_SERVER: localhost
+          DB_USER: sa
+
+      - name: Run integration tests
+        run: npm test
+        env:
+          DB_INTEGRATION: '1'
+          DB_SERVER: localhost
+          DB_USER: sa
+
+  # 3. Build the Docker image and push it to GitHub Container Registry
+  #    only after both test jobs passed and only on push to the default branch
+  build:
+    needs: [test, db-test]
+    if: needs.test.result == 'success' && needs.db-test.result == 'success' && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # GHCR needs a lowercase image name; metadata-action converts it and builds tags
+      - name: Image name and tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest
+            type=sha,format=long,prefix=
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
