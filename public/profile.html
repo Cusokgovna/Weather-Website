@@ -3,27 +3,30 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Weather — FAQ</title>
+  <title>My Profile — Weather</title>
+  <meta name="description" content="Personal account of the Weather website: name, email, avatar, favorite cities and search history." />
+  <meta name="robots" content="noindex" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://openweathermap.org">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="dns-prefetch" href="https://openweathermap.org">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./styles.css" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
   <header class="container">
   <button class="burger" id="burger" aria-label="Open menu" aria-expanded="false" aria-controls="mobileNav">
     <span></span><span></span><span></span>
   </button>
-  <h1>Weather</h1>
+  <a class="logo" href="/">Weather</a>
   <nav class="nav-desktop" aria-label="Main navigation">
     <ul class="menu">
-  <li><a href="./index.html#main">Home</a></li>
+      <li><a href="/">Home</a></li>
       <li class="has-dropdown">
-  <button class="dropdown-toggle" id="moreMenuBtn" aria-expanded="false" aria-controls="dropdownMore">Menu ▾</button>
+        <button class="dropdown-toggle" id="moreMenuBtn" aria-expanded="false" aria-controls="dropdownMore">Menu ▾</button>
         <ul id="dropdownMore" class="dropdown" role="menu" aria-label="More">
-          <li><a href="./faq.html" role="menuitem" class="active">FAQ</a></li>
-          <li><a href="./profile.html" role="menuitem">Profile</a></li>
+          <li><a href="/faq" role="menuitem">FAQ</a></li>
+          <li><a href="/profile" role="menuitem" aria-current="page">Profile</a></li>
           <li><button id="openAuth" role="menuitem">Sign in / Register</button></li>
           <li><button id="clearCache" role="menuitem">Clear cache</button></li>
         </ul>
@@ -32,63 +35,90 @@
   </nav>
   <div class="controls">
     <div class="search">
-      <input id="q" type="text" placeholder="City or place…" autocomplete="off" />
+      <input id="q" type="text" placeholder="City or place…" autocomplete="off" aria-label="Search city" />
       <div id="suggestions" class="suggestions"></div>
     </div>
     <button id="useLocation">My location</button>
-    <button id="toggleTheme" title="Toggle light/dark">🌓</button>
+    <button id="toggleTheme" title="Toggle light/dark" aria-label="Toggle light/dark theme">🌓</button>
+    <img id="headerAvatar" class="header-avatar" src="" alt="" width="32" height="32" style="display:none" />
     <button id="profileBtn" class="profile-btn" type="button" aria-haspopup="menu" aria-expanded="false">Guest</button>
     <ul id="profileMenu" class="dropdown right" role="menu" aria-label="Profile">
-      <li><a href="./profile.html" role="menuitem">Profile</a></li>
+      <li><a href="/profile" role="menuitem">Profile</a></li>
       <li><button id="openAuth2" role="menuitem">Sign in / Register</button></li>
       <li><button id="logout" role="menuitem">Log out</button></li>
     </ul>
   </div>
 </header>
 
+<!-- Mobile navigation -->
 <nav id="mobileNav" class="mobile-nav" aria-label="Mobile navigation">
   <ul>
-  <li><a href="./index.html#main" onclick="document.getElementById('burger').click()">Home</a></li>
-  <li><a href="./faq.html" onclick="document.getElementById('burger').click()" class="active">FAQ</a></li>
-  <li><a href="./profile.html" onclick="document.getElementById('burger').click()">Profile</a></li>
+  <li><a href="/" onclick="document.getElementById('burger').click()">Home</a></li>
+  <li><a href="/faq" onclick="document.getElementById('burger').click()">FAQ</a></li>
+  <li><a href="/profile" onclick="document.getElementById('burger').click()">Profile</a></li>
   <li><button id="openAuthMobile">Sign in / Register</button></li>
   </ul>
 </nav>
 
   <main class="container" id="main">
-    <section class="card" aria-label="Frequently asked questions">
-  <h2 style="margin:0 0 12px 0;">FAQ</h2>
-      <div class="faq">
-        <details open>
-          <summary>Where does weather data come from?</summary>
-          <p>We use OpenWeather: geocoding, current weather, 5-day/3-hour forecast and air quality.</p>
-        </details>
-        <details>
-          <summary>Why is it unsafe to store API keys in config.js?</summary>
-          <p>Because client sources are visible to everyone. In production, proxy requests through a server and keep keys there.</p>
-        </details>
-        <details>
-          <summary>How to change theme?</summary>
-          <p>Click <b>🌓</b> in the header. The choice is saved to localStorage.</p>
-        </details>
-        <details>
-          <summary>How to enable geolocation?</summary>
-          <p>Click "My location" and allow geolocation access in the browser. If denied — use search.</p>
-        </details>
-        <details>
-          <summary>How secure is authentication?</summary>
-          <p>This demo stores users in localStorage and hashes passwords via SHA‑256 (Web Crypto). For production you need a backend, sessions/JWT and HTTPS.</p>
-        </details>
-      </div>
+    <h1 class="page-title">My profile</h1>
+
+    <section id="profileGuest" class="card" hidden>
+      <p>Sign in or create an account to see your profile, favorite cities and search history.</p>
+      <button class="btn-like" type="button" onclick="document.getElementById('openAuth').click()">Sign in / Register</button>
     </section>
+
+    <div id="profileContent" hidden>
+      <section class="card profile" aria-labelledby="accountTitle">
+        <div class="card-header"><h2 id="accountTitle">Account</h2></div>
+        <div class="profile-grid">
+          <div class="avatar-box">
+            <img id="avatarPreview" class="avatar" alt="Your avatar" width="140" height="140" />
+            <label class="btn-like">
+              <input id="avatarFile" type="file" accept="image/*" hidden />
+              Upload avatar
+            </label>
+            <div id="avatarInfo" class="muted" style="font-size:13px;margin-top:6px">Max avatar size: ~300 KB</div>
+          </div>
+          <form id="profileForm" class="form" novalidate>
+            <div class="field">
+              <label for="pfName">Name</label>
+              <input id="pfName" name="name" type="text" required minlength="2" placeholder="Your name" autocomplete="name" />
+            </div>
+            <div class="field">
+              <label for="pfEmail">Email</label>
+              <input id="pfEmail" name="email" type="email" required placeholder="you@example.com" autocomplete="email" />
+              <small class="error"></small>
+            </div>
+            <div>
+              <button class="btn-primary" type="submit">Save</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="favTitle">
+        <div class="card-header"><h2 id="favTitle" class="card-title">Favorite cities</h2></div>
+        <div class="fav-add">
+          <input id="favCity" type="text" placeholder="Add a city to favorites…" autocomplete="off" aria-label="City name" />
+          <button id="favAdd">Add</button>
+        </div>
+        <div id="favorites" class="favorites"></div>
+      </section>
+
+      <section class="card" aria-labelledby="historyTitle">
+        <h2 id="historyTitle" class="card-title">Recent searches</h2>
+        <ul id="history" class="history"></ul>
+      </section>
+    </div>
   </main>
 
-  <!-- Auth modal (same as on index) -->
+  <!-- Auth modal (login/register) -->
   <div id="authModal" class="modal" aria-hidden="true" aria-labelledby="authTitle" role="dialog">
     <div class="modal-backdrop" data-close="authModal"></div>
     <div class="modal-content" role="document">
       <div class="modal-header">
-        <h3 id="authTitle">Account</h3>
+        <h2 id="authTitle" class="modal-title">Account</h2>
         <button class="modal-close" data-close="authModal" aria-label="Close">✕</button>
       </div>
       <div class="tabs" role="tablist">
@@ -100,7 +130,6 @@
           <div class="field">
             <label for="loginEmail">Email</label>
             <input id="loginEmail" name="email" type="email" required placeholder="you@example.com" autocomplete="email" />
-            <small class="error"></small>
           </div>
           <div class="field">
             <label for="loginPassword">Password</label>
@@ -114,17 +143,14 @@
           <div class="field">
             <label for="regName">Name</label>
             <input id="regName" name="name" type="text" required minlength="2" placeholder="Your name" autocomplete="name" />
-            <small class="error"></small>
           </div>
           <div class="field">
             <label for="regEmail">Email</label>
             <input id="regEmail" name="email" type="email" required placeholder="you@example.com" autocomplete="email" />
-            <small class="error"></small>
           </div>
           <div class="field">
             <label for="regPassword">Password</label>
             <input id="regPassword" name="password" type="password" required minlength="6" placeholder="At least 6 characters" autocomplete="new-password" />
-            <small class="error"></small>
           </div>
           <div class="field">
             <label for="regConfirm">Confirm password</label>
@@ -138,11 +164,11 @@
   </div>
 
   <footer class="container muted">
-    Made by Zhanakhmet Abdulaziz and Tauken Ruslan. <code></code>
+    Made by Zhanakhmet Abdulaziz and Tauken Ruslan. Weather data: <a href="https://openweathermap.org/" rel="noopener">OpenWeather</a>.
   </footer>
 
-  <script src="./config.js"></script>
-  <script src="./toasts.js"></script>
-  <script type="module" src="./app.js"></script>
+  <script src="/toasts.js"></script>
+  <script type="module" src="/app.js"></script>
+  <script type="module" src="/profile.js"></script>
 </body>
 </html>
