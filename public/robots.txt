@@ -1,0 +1,12 @@
+# Rules for all robots
+User-agent: *
+Disallow: /profile
+Disallow: /api/
+
+# Yandex only: same rules + ignore UTM parameters
+User-agent: Yandex
+Disallow: /profile
+Disallow: /api/
+Clean-param: utm_source&utm_medium&utm_campaign
+
+Sitemap: https://example.com/sitemap.xml
