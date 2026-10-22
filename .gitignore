@@ -7,7 +7,8 @@ node_modules/
 !.env.example
 
 # Old client-side config with an API key — no longer used, never commit it
-config.js
+/config.js
+public/config.js
 
 # Logs, OS and editor files
 npm-debug.log*
