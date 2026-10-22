@@ -1,0 +1,63 @@
+erDiagram
+    Users ||--|| UserSettings : "has settings"
+    Users ||--o{ Sessions : "signs in"
+    Users ||--o{ FavoriteCities : "adds"
+    Cities ||--o{ FavoriteCities : "is favorite"
+    Users ||--o{ SearchHistory : "searches"
+    Cities ||--o{ SearchHistory : "is searched"
+    Cities ||--o{ WeatherSnapshots : "has measurements"
+
+    Users {
+        INT UserId PK
+        NVARCHAR(100) Name
+        NVARCHAR(255) Email UK
+        NVARCHAR(255) PasswordHash
+        NVARCHAR(MAX) AvatarDataUrl "NULL"
+        DATETIME2 CreatedAt
+        DATETIME2 UpdatedAt
+    }
+    UserSettings {
+        INT UserId PK,FK
+        NVARCHAR(10) Theme "dark | light"
+        NVARCHAR(10) Units "metric | imperial"
+        NVARCHAR(5) Language
+    }
+    Sessions {
+        INT SessionId PK
+        INT UserId FK
+        CHAR(64) TokenHash UK
+        DATETIME2 CreatedAt
+        DATETIME2 ExpiresAt
+    }
+    Cities {
+        INT CityId PK
+        NVARCHAR(150) Name
+        NVARCHAR(2) Country "NULL"
+        NVARCHAR(150) State "NULL"
+        DECIMAL(8_4) Latitude UK
+        DECIMAL(8_4) Longitude UK
+        DATETIME2 CreatedAt
+    }
+    FavoriteCities {
+        INT UserId PK,FK
+        INT CityId PK,FK
+        DATETIME2 AddedAt
+    }
+    SearchHistory {
+        BIGINT SearchId PK
+        INT UserId FK
+        INT CityId FK
+        DATETIME2 SearchedAt
+    }
+    WeatherSnapshots {
+        BIGINT SnapshotId PK
+        INT CityId FK
+        DATETIME2 ObservedAt
+        DECIMAL(5_2) TempC
+        DECIMAL(5_2) FeelsLikeC "NULL"
+        TINYINT Humidity "NULL"
+        SMALLINT PressureHPa "NULL"
+        DECIMAL(5_2) WindSpeedMs "NULL"
+        NVARCHAR(100) Description "NULL"
+        NVARCHAR(10) Icon "NULL"
+    }
