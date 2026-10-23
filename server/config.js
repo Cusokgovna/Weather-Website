@@ -8,8 +8,9 @@ const config = {
   // Public address of the site: used in sitemap.xml and canonical links
   siteUrl: (process.env.SITE_URL || 'https://example.com').replace(/\/+$/, ''),
   cookieSecure: bool(process.env.COOKIE_SECURE),
-  // "mssql" (default) or "memory" (no database: demo data in RAM until restart)
-  dbDriver: process.env.DB_DRIVER || 'mssql',
+  // "mssql" (default) or "memory" (no database: demo data in RAM until restart).
+  // `npm run demo` passes --memory, so it works on Windows without setting variables.
+  dbDriver: process.argv.includes('--memory') ? 'memory' : process.env.DB_DRIVER || 'mssql',
   db: {
     server: process.env.DB_SERVER || 'localhost',
     port: process.env.DB_PORT ? Number(process.env.DB_PORT) : undefined,

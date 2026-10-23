@@ -30,7 +30,7 @@ JOIN dbo.Users      AS u ON u.UserId = l.SellerId
 WHERE l.Status = 'active'
 ORDER BY g.SortOrder, l.Price;
 
--- 4. Количество активных лотов и минимальная цена по каждой игре
+-- 4. Количество активных лотов и минимальная цена по каждой игре и сервису
 SELECT g.Name, COUNT(l.ListingId) AS ActiveListings, MIN(l.Price) AS MinPrice
 FROM dbo.Games AS g
 LEFT JOIN dbo.Categories AS c ON c.GameId = g.GameId
@@ -63,11 +63,25 @@ LEFT JOIN dbo.Transactions AS t ON t.UserId = u.UserId
 GROUP BY u.Username, u.Balance
 HAVING u.Balance <> ISNULL(SUM(t.Amount), 0);
 
--- 9. Чат сделки №2
-SELECT m.CreatedAt, u.Username, m.Text
-FROM dbo.Messages AS m JOIN dbo.Users AS u ON u.UserId = m.SenderId
-WHERE m.OrderId = 2
+-- 9. Все чаты: лот, покупатель, продавец, число сообщений, вызывали ли поддержку
+SELECT c.ConversationId, l.Title, b.Username AS Buyer, s.Username AS Seller,
+       (SELECT COUNT(*) FROM dbo.Messages m WHERE m.ConversationId = c.ConversationId) AS Messages,
+       c.SupportRequestedAt, c.LastMessageAt
+FROM dbo.Conversations AS c
+JOIN dbo.Listings AS l ON l.ListingId = c.ListingId
+JOIN dbo.Users    AS b ON b.UserId = c.BuyerId
+JOIN dbo.Users    AS s ON s.UserId = c.SellerId
+ORDER BY c.LastMessageAt DESC;
+
+-- 10. Переписка в чате №2 (SenderId NULL = системное сообщение)
+SELECT m.CreatedAt, ISNULL(u.Username, N'[system]') AS Sender, m.Text
+FROM dbo.Messages AS m LEFT JOIN dbo.Users AS u ON u.UserId = m.SenderId
+WHERE m.ConversationId = 2
 ORDER BY m.MessageId;
 
--- 10. Пример вызова процедуры покупки (раскомментируйте, чтобы проверить ошибку "Нельзя купить свой лот")
+-- 11. Новости и курсы валют
+SELECT NewsId, Title, PublishedAt FROM dbo.News ORDER BY PublishedAt DESC;
+SELECT * FROM dbo.ExchangeRates;
+
+-- 12. Пример вызова процедуры покупки (раскомментируйте, чтобы увидеть ошибку "You cannot buy your own offer")
 -- EXEC dbo.usp_CreateOrder @BuyerId = 2, @ListingId = 1, @Quantity = 1;

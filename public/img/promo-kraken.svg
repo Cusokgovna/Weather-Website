@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 210">
+  <defs><radialGradient id="bg" cx="50%" cy="40%" r="70%"><stop offset="0" stop-color="#3a1d1d"/><stop offset="1" stop-color="#0d0d0d"/></radialGradient></defs>
+  <rect width="320" height="210" fill="url(#bg)"/>
+  <g fill="none" stroke="#c81f24" stroke-width="10" stroke-linecap="round">
+    <path d="M120 120c-30 20-50 10-70 40s-20 40-10 50"/>
+    <path d="M140 135c-10 25-30 35-30 75"/>
+    <path d="M180 135c10 25 30 35 30 75"/>
+    <path d="M200 120c30 20 50 10 70 40s20 40 10 50"/>
+    <path d="M110 100c-40 0-60-30-90-20"/>
+    <path d="M210 100c40 0 60-30 90-20"/>
+  </g>
+  <ellipse cx="160" cy="90" rx="62" ry="58" fill="#e3262b"/>
+  <ellipse cx="160" cy="70" rx="40" ry="22" fill="#f05a5e" opacity=".5"/>
+  <circle cx="138" cy="96" r="13" fill="#fff"/><circle cx="182" cy="96" r="13" fill="#fff"/>
+  <circle cx="141" cy="99" r="6" fill="#111"/><circle cx="185" cy="99" r="6" fill="#111"/>
+  <path d="M146 124q14 10 28 0" stroke="#111" stroke-width="4" fill="none" stroke-linecap="round"/>
+  <g transform="translate(18 34) rotate(-18)"><rect width="78" height="10" fill="#9aa0a6"/><rect x="10" y="10" width="14" height="16" fill="#6b7075"/><rect x="60" y="-6" width="14" height="6" fill="#4d8dff"/></g>
+  <g transform="translate(224 12) rotate(18)"><rect width="78" height="10" fill="#9aa0a6"/><rect x="54" y="10" width="14" height="16" fill="#6b7075"/><rect x="4" y="-6" width="14" height="6" fill="#4d8dff"/></g>
+  <text x="160" y="196" fill="#fff" font-family="Impact, Arial Black, sans-serif" font-size="20" text-anchor="middle" letter-spacing="1">KRAKEN SHOP</text>
+</svg>

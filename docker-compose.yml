@@ -1,10 +1,12 @@
+name: kraken-shop
+
 # Website only. SQL Server runs on your computer (installed SQL Server + SSMS).
 # In .env set DB_SERVER=host.docker.internal
 #   docker compose up --build
 services:
   web:
     build: .
-    image: weather-website:local
+    image: kraken-shop:local
     env_file: .env
     ports:
       - "${PORT:-3000}:3000"

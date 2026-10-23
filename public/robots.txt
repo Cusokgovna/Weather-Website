@@ -1,11 +1,23 @@
 # Rules for all robots
 User-agent: *
-Disallow: /profile
+Disallow: /account
+Disallow: /deals
+Disallow: /chat
+Disallow: /sell
+Disallow: /login
+Disallow: /register
+Disallow: /search
 Disallow: /api/
 
 # Yandex only: same rules + ignore UTM parameters
 User-agent: Yandex
-Disallow: /profile
+Disallow: /account
+Disallow: /deals
+Disallow: /chat
+Disallow: /sell
+Disallow: /login
+Disallow: /register
+Disallow: /search
 Disallow: /api/
 Clean-param: utm_source&utm_medium&utm_campaign
 

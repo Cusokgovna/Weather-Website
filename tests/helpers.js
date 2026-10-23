@@ -28,6 +28,9 @@ async function startServer(repo, opts = {}) {
   return { base, client, close: () => new Promise((r) => server.close(r)) };
 }
 
+// 1×1 transparent PNG
+const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+
 // Shared API contract: the same scenarios run against the memory repo and against real SQL Server.
 // Every run creates its own users, so it also works on a database with seed data.
 function apiContract(getCtx) {
@@ -66,8 +69,31 @@ function apiContract(getCtx) {
       assert.equal((await req('/api/auth/me')).json.user.email, acc.email);
       assert.equal((await req('/api/auth/logout', { method: 'POST' })).status, 204);
       assert.equal((await req('/api/auth/me')).json.user, null);
-      assert.equal((await req('/api/auth/login', { method: 'POST', body: { email: acc.email, password: 'wrong-pass' } })).status, 401);
-      assert.equal((await req('/api/auth/login', { method: 'POST', body: { email: acc.email.toUpperCase(), password: acc.password } })).status, 200);
+      assert.equal((await req('/api/auth/login', { method: 'POST', body: { login: acc.email, password: 'wrong-pass' } })).status, 401);
+      assert.equal((await req('/api/auth/login', { method: 'POST', body: { login: acc.email.toUpperCase(), password: acc.password } })).status, 200, 'email, any case');
+      assert.equal((await getCtx().client()('/api/auth/login', { method: 'POST', body: { login: acc.username, password: acc.password } })).status, 200, 'nickname');
+
+      // special code: second secret at login
+      assert.equal((await req('/api/users/me/special-code', { method: 'PUT', body: { password: 'nope', code: '1234' } })).status, 403);
+      assert.equal((await req('/api/users/me/special-code', { method: 'PUT', body: { password: acc.password, code: '12' } })).status, 400);
+      assert.equal((await req('/api/users/me/special-code', { method: 'PUT', body: { password: acc.password, code: '4321' } })).json.specialCodeEnabled, true);
+      let r2 = await getCtx().client()('/api/auth/login', { method: 'POST', body: { login: acc.username, password: acc.password } });
+      assert.equal(r2.status, 401);
+      assert.equal(r2.json.code, 'SPECIAL_CODE_REQUIRED');
+      r2 = await getCtx().client()('/api/auth/login', { method: 'POST', body: { login: acc.username, password: acc.password, specialCode: '0000' } });
+      assert.equal(r2.status, 401);
+      r2 = await getCtx().client()('/api/auth/login', { method: 'POST', body: { login: acc.username, password: acc.password, specialCode: '4321' } });
+      assert.equal(r2.status, 200);
+      assert.equal(r2.json.user.specialCodeEnabled, true);
+
+      // profile: real name, avatar (only raster images)
+      r2 = await req('/api/users/me', { method: 'PUT', body: { username: acc.username, email: acc.email, realName: 'Ivan Petrov' } });
+      assert.equal(r2.json.user.realName, 'Ivan Petrov');
+      assert.equal((await req('/api/users/me/avatar', { method: 'PUT', body: { avatar: 'data:image/svg+xml;base64,PHN2Zz4=' } })).status, 400, 'no SVG');
+      assert.equal((await req('/api/users/me/avatar', { method: 'PUT', body: { avatar: PNG } })).status, 200);
+      const avatar = await req(`/img/avatars/${acc.username}`);
+      assert.equal(avatar.status, 200);
+      assert.equal(avatar.headers.get('content-type'), 'image/png');
     }],
 
     ['marketplace: listing → purchase → chat → confirm → review', async (assert) => {
@@ -92,10 +118,17 @@ function apiContract(getCtx) {
       assert.equal(r.json.game.slug, 'cs2');
       assert.equal(r.json.price, 1000);
 
+      // "To chat" before buying
+      assert.equal((await seller('/api/conversations', { method: 'POST', body: { listingId } })).status, 400, 'no chat with yourself');
+      const preChat = (await buyer('/api/conversations', { method: 'POST', body: { listingId } })).json.conversationId;
+      assert.equal((await buyer('/api/conversations', { method: 'POST', body: { listingId } })).json.conversationId, preChat, 'one chat per offer and buyer');
+      await buyer(`/api/conversations/${preChat}/messages`, { method: 'POST', body: { text: 'Is it available?' } });
+      assert.equal((await stranger(`/api/conversations/${preChat}`)).status, 404, 'chat is private');
+
       // money rules (stored procedure usp_CreateOrder)
       r = await buyer('/api/orders', { method: 'POST', body: { listingId, quantity: 2 } });
       assert.equal(r.status, 409, 'not enough money');
-      assert.match(r.json.error, /Недостаточно средств/);
+      assert.match(r.json.error, /Not enough money/);
       r = await buyer('/api/wallet/deposit', { method: 'POST', body: { amount: 5000 } });
       assert.equal(r.json.balance, 5000);
       assert.equal((await buyer('/api/wallet/deposit', { method: 'POST', body: { amount: -5 } })).status, 400);
@@ -104,7 +137,8 @@ function apiContract(getCtx) {
 
       r = await buyer('/api/orders', { method: 'POST', body: { listingId, quantity: 2 } });
       assert.equal(r.status, 201);
-      const { orderId } = r.json;
+      const { orderId, conversationId } = r.json;
+      assert.equal(conversationId, preChat, 'purchase continues the chat that was opened with "To chat"');
       assert.equal((await buyer('/api/wallet')).json.balance, 3000);
       assert.equal((await buyer(`/api/listings/${listingId}`)).json.quantity, 1);
 
@@ -116,11 +150,26 @@ function apiContract(getCtx) {
       assert.equal(r.json.status, 'paid');
       assert.equal((await seller('/api/my/orders?role=seller')).json[0].orderId, orderId);
 
-      // chat
-      await seller(`/api/orders/${orderId}/messages`, { method: 'POST', body: { text: 'Трейд отправлен' } });
-      r = await buyer(`/api/orders/${orderId}/messages`, { method: 'POST', body: { text: 'Получил, спасибо' } });
-      assert.deepEqual(r.json.map((m) => m.text), ['Трейд отправлен', 'Получил, спасибо']);
-      assert.equal((await buyer(`/api/orders/${orderId}/messages`, { method: 'POST', body: { text: '  ' } })).status, 400);
+      // chat: system message about the payment, text, picture, polling with ?after=
+      await seller(`/api/conversations/${conversationId}/messages`, { method: 'POST', body: { text: 'Трейд отправлен' } });
+      r = await buyer(`/api/conversations/${conversationId}/messages`, { method: 'POST', body: { attachment: PNG } });
+      assert.equal(r.status, 201);
+      r = await buyer(`/api/conversations/${conversationId}`);
+      assert.equal(r.json.role, 'buyer');
+      assert.equal(r.json.orders[0].orderId, orderId);
+      const texts = r.json.messages.map((m) => m.text);
+      assert.equal(texts[0], 'Is it available?');
+      assert.match(texts[1], new RegExp(`Order #${orderId} paid`));
+      assert.equal(r.json.messages[1].sender, null, 'system message');
+      assert.equal(texts[2], 'Трейд отправлен');
+      assert.equal(r.json.messages[3].attachment, PNG);
+      const lastId = r.json.messages[2].messageId;
+      assert.equal((await seller(`/api/conversations/${conversationId}/messages?after=${lastId}`)).json.length, 1);
+      assert.equal((await buyer(`/api/conversations/${conversationId}/messages`, { method: 'POST', body: { text: '  ' } })).status, 400);
+      assert.equal((await buyer(`/api/conversations/${conversationId}/messages`, { method: 'POST', body: { attachment: 'data:text/html;base64,PGI+' } })).status, 400);
+      r = await buyer(`/api/conversations/${conversationId}/support`, { method: 'POST' });
+      assert.ok(r.json.supportRequestedAt);
+      assert.equal((await seller('/api/conversations')).json[0].conversationId, conversationId);
 
       // confirm → seller gets money
       assert.equal((await buyer(`/api/orders/${orderId}/review`, { method: 'POST', body: { rating: 5 } })).status, 409, 'review before completion');
@@ -137,6 +186,7 @@ function apiContract(getCtx) {
       r = await stranger(`/api/users/seller_${tag}`);
       assert.equal(r.json.salesCount, 1);
       assert.equal(r.json.avgRating, 5);
+      assert.equal(r.json.socialCredit, 10 + 20 * 2, '+10 per deal, +20 per star above 3');
       assert.equal(r.json.reviews[0].text, 'Супер');
       assert.equal(r.json.listings.length, 1);
     }],
@@ -144,7 +194,7 @@ function apiContract(getCtx) {
     ['marketplace: dispute → refund returns money and stock; last item → sold', async (assert) => {
       const seller = await signUp('seller2');
       const buyer = await signUp('buyer2');
-      const catId = await categoryId(seller, 'wow', 'gold');
+      const catId = await categoryId(seller, 'eft', 'roubles');
       const { listingId } = (await seller('/api/listings', { method: 'POST', body: { categoryId: catId, title: `Gold ${tag}`, price: 250.5, quantity: 1 } })).json;
       await buyer('/api/wallet/deposit', { method: 'POST', body: { amount: 1000 } });
 
@@ -155,6 +205,7 @@ function apiContract(getCtx) {
       assert.equal((await buyer(`/api/orders/${orderId}/dispute`, { method: 'POST' })).json.status, 'disputed');
       assert.equal((await buyer(`/api/orders/${orderId}/refund`, { method: 'POST' })).status, 403);
       assert.equal((await seller(`/api/orders/${orderId}/refund`, { method: 'POST' })).json.status, 'refunded');
+      assert.equal((await buyer(`/api/users/seller2_${tag}`)).json.socialCredit, -100, '-100 for a refunded sale');
 
       const wallet = (await buyer('/api/wallet')).json;
       assert.equal(wallet.balance, 1000);
@@ -164,12 +215,16 @@ function apiContract(getCtx) {
       assert.equal(listing.quantity, 1);
     }],
 
-    ['listings: only the owner can edit; closed lots disappear from the catalog', async (assert) => {
+    ['listings: picture, only the owner can edit; closed lots disappear from the catalog', async (assert) => {
       const seller = await signUp('seller3');
       const other = await signUp('other3');
       const catId = await categoryId(seller, 'roblox', 'robux');
       const body = { categoryId: catId, title: `Robux ${tag}`, price: 100, quantity: 10 };
-      const { listingId } = (await seller('/api/listings', { method: 'POST', body })).json;
+      assert.equal((await seller('/api/listings', { method: 'POST', body: { ...body, image: 'data:image/svg+xml;base64,PHN2Zz4=' } })).status, 400);
+      const { listingId } = (await seller('/api/listings', { method: 'POST', body: { ...body, image: PNG } })).json;
+      assert.equal((await other(`/api/listings/${listingId}`)).json.hasImage, true);
+      const pic = await other(`/img/listings/${listingId}?v=1`);
+      assert.equal(pic.headers.get('content-type'), 'image/png');
 
       assert.equal((await other(`/api/listings/${listingId}`, { method: 'PUT', body: { ...body, price: 1 } })).status, 404);
       let r = await seller(`/api/listings/${listingId}`, { method: 'PUT', body: { ...body, price: 90 } });
@@ -182,7 +237,7 @@ function apiContract(getCtx) {
 
     ['protected endpoints require sign in', async (assert) => {
       const req = getCtx().client();
-      for (const path of ['/api/wallet', '/api/my/orders', '/api/my/listings', '/api/orders/1']) {
+      for (const path of ['/api/wallet', '/api/my/orders', '/api/my/listings', '/api/orders/1', '/api/conversations', '/api/conversations/1']) {
         assert.equal((await req(path)).status, 401, path);
       }
       assert.equal((await req('/api/orders', { method: 'POST', body: { listingId: 1 } })).status, 401);
@@ -190,4 +245,4 @@ function apiContract(getCtx) {
   ];
 }
 
-module.exports = { startServer, apiContract };
+module.exports = { startServer, apiContract, PNG };

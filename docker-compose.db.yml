@@ -21,7 +21,7 @@ services:
   # Runs database/01..03 *.sql once the server is healthy (scripts are idempotent)
   db-init:
     build: .
-    image: weather-website:local
+    image: kraken-shop:local
     command: ["node", "scripts/db-init.js"]
     environment:
       DB_SERVER: db

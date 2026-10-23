@@ -1,4 +1,4 @@
-# Weather website: Node.js (Express) server + static frontend
+# Kraken Shop: Node.js (Express) server, pages and API
 FROM node:22-alpine
 
 # All following commands run in /app inside the container

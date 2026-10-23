@@ -29,14 +29,17 @@ const SORTS = {
 // LIKE treats % _ [ as wildcards — escape them in user input
 const likeEscape = (s) => s.replace(/[%_[]/g, '[$&]');
 const num = (v) => (v == null ? null : Number(v));
+const isUnique = (err) => err.number === 2627 || err.number === 2601;
 
 const mapUser = (r) => r && {
   id: r.UserId,
   username: r.Username,
   email: r.Email,
+  realName: r.RealName,
   avatar: r.AvatarDataUrl || null,
   balance: Number(r.Balance),
   passwordHash: r.PasswordHash,
+  specialCodeHash: r.SpecialCodeHash || null,
   createdAt: r.CreatedAt,
 };
 
@@ -47,8 +50,10 @@ const mapListing = (r) => ({
   price: Number(r.Price),
   quantity: r.Quantity,
   status: r.Status,
+  hasImage: !!r.HasImage,
   createdAt: r.CreatedAt,
-  game: { slug: r.GameSlug, name: r.GameName },
+  updatedAt: r.UpdatedAt,
+  game: { slug: r.GameSlug, name: r.GameName, section: r.GameSection },
   category: { categoryId: r.CategoryId, slug: r.CategorySlug, name: r.CategoryName, kind: r.CategoryKind },
   seller: { userId: r.SellerId, username: r.SellerName, avgRating: num(r.AvgRating), salesCount: r.SalesCount },
 });
@@ -56,6 +61,7 @@ const mapListing = (r) => ({
 const mapOrder = (r) => ({
   orderId: r.OrderId,
   listingId: r.ListingId,
+  conversationId: r.ConversationId,
   title: r.Title,
   game: { slug: r.GameSlug, name: r.GameName },
   buyer: { userId: r.BuyerId, username: r.BuyerName },
@@ -69,10 +75,29 @@ const mapOrder = (r) => ({
   hasReview: !!r.HasReview,
 });
 
+const mapConversation = (r) => ({
+  conversationId: r.ConversationId,
+  listing: { listingId: r.ListingId, title: r.Title, price: Number(r.Price), status: r.ListingStatus },
+  buyer: { userId: r.BuyerId, username: r.BuyerName },
+  seller: { userId: r.SellerId, username: r.SellerName },
+  supportRequestedAt: r.SupportRequestedAt,
+  lastMessageAt: r.LastMessageAt,
+  lastMessage: r.LastText ?? null,
+});
+
+const mapMessage = (m) => ({
+  messageId: Number(m.MessageId),
+  text: m.Text,
+  attachment: m.AttachmentDataUrl || null,
+  createdAt: m.CreatedAt,
+  sender: m.SenderId == null ? null : { userId: m.SenderId, username: m.Username },
+});
+
 const LISTING_SELECT = `
-  SELECT l.ListingId, l.Title, l.Description, l.Price, l.Quantity, l.Status, l.CreatedAt, l.SellerId,
+  SELECT l.ListingId, l.Title, l.Description, l.Price, l.Quantity, l.Status, l.CreatedAt, l.UpdatedAt, l.SellerId,
+         CASE WHEN l.ImageDataUrl IS NULL THEN 0 ELSE 1 END AS HasImage,
          c.CategoryId, c.Slug AS CategorySlug, c.Name AS CategoryName, c.Kind AS CategoryKind,
-         g.Slug AS GameSlug, g.Name AS GameName,
+         g.Slug AS GameSlug, g.Name AS GameName, g.Section AS GameSection,
          s.Username AS SellerName, s.AvgRating, s.SalesCount
   FROM dbo.Listings AS l
   JOIN dbo.Categories AS c ON c.CategoryId = l.CategoryId
@@ -80,7 +105,7 @@ const LISTING_SELECT = `
   JOIN dbo.vw_SellerStats AS s ON s.UserId = l.SellerId`;
 
 const ORDER_SELECT = `
-  SELECT o.OrderId, o.ListingId, o.Quantity, o.UnitPrice, o.TotalPrice, o.Status, o.CreatedAt, o.ClosedAt,
+  SELECT o.OrderId, o.ListingId, o.ConversationId, o.Quantity, o.UnitPrice, o.TotalPrice, o.Status, o.CreatedAt, o.ClosedAt,
          o.BuyerId, b.Username AS BuyerName, o.SellerId, s.Username AS SellerName,
          l.Title, g.Slug AS GameSlug, g.Name AS GameName,
          CASE WHEN EXISTS (SELECT 1 FROM dbo.Reviews r WHERE r.OrderId = o.OrderId) THEN 1 ELSE 0 END AS HasReview
@@ -90,6 +115,16 @@ const ORDER_SELECT = `
   JOIN dbo.Listings AS l ON l.ListingId = o.ListingId
   JOIN dbo.Categories AS c ON c.CategoryId = l.CategoryId
   JOIN dbo.Games AS g ON g.GameId = c.GameId`;
+
+const CONVERSATION_SELECT = `
+  SELECT cv.ConversationId, cv.ListingId, cv.BuyerId, cv.SellerId, cv.SupportRequestedAt, cv.LastMessageAt,
+         l.Title, l.Price, l.Status AS ListingStatus, b.Username AS BuyerName, s.Username AS SellerName,
+         (SELECT TOP (1) ISNULL(m.Text, N'[image]') FROM dbo.Messages m
+           WHERE m.ConversationId = cv.ConversationId ORDER BY m.MessageId DESC) AS LastText
+  FROM dbo.Conversations AS cv
+  JOIN dbo.Listings AS l ON l.ListingId = cv.ListingId
+  JOIN dbo.Users AS b ON b.UserId = cv.BuyerId
+  JOIN dbo.Users AS s ON s.UserId = cv.SellerId`;
 
 function createMssqlRepo(dbConfig) {
   let poolPromise = null;
@@ -114,13 +149,19 @@ function createMssqlRepo(dbConfig) {
 
   // Unique constraint violation → which field is taken
   function uniqueError(err) {
-    if (err.number === 2627 || err.number === 2601) {
-      err.code = /Username/i.test(err.message) ? 'USERNAME_TAKEN' : 'EMAIL_TAKEN';
-    }
+    if (isUnique(err)) err.code = /Username/i.test(err.message) ? 'USERNAME_TAKEN' : 'EMAIL_TAKEN';
     return err;
   }
 
-  const USER_COLS = 'UserId, Username, Email, PasswordHash, AvatarDataUrl, Balance, CreatedAt';
+  async function systemMessage(conversationId, text) {
+    await query(
+      `INSERT INTO dbo.Messages (ConversationId, SenderId, Text) VALUES (@id, NULL, @text);
+       UPDATE dbo.Conversations SET LastMessageAt = SYSUTCDATETIME() WHERE ConversationId = @id;`,
+      { id: [sql.Int, conversationId], text: [sql.NVarChar(1000), text] },
+    );
+  }
+
+  const USER_COLS = 'UserId, Username, Email, RealName, PasswordHash, SpecialCodeHash, AvatarDataUrl, Balance, CreatedAt';
 
   return {
     kind: 'mssql',
@@ -134,20 +175,20 @@ function createMssqlRepo(dbConfig) {
     async createUser({ username, email, passwordHash }) {
       try {
         const r = await query(
-          `INSERT INTO dbo.Users (Username, Email, PasswordHash)
-           OUTPUT INSERTED.UserId, INSERTED.Username, INSERTED.Email, INSERTED.PasswordHash,
-                  INSERTED.AvatarDataUrl, INSERTED.Balance, INSERTED.CreatedAt
-           VALUES (@username, @email, @hash);`,
+          `INSERT INTO dbo.Users (Username, Email, PasswordHash) OUTPUT INSERTED.UserId VALUES (@username, @email, @hash);`,
           { username: [sql.NVarChar(32), username], email: [sql.NVarChar(255), email], hash: [sql.NVarChar(255), passwordHash] },
         );
-        return mapUser(r.recordset[0]);
+        return this.findUserById(r.recordset[0].UserId);
       } catch (err) {
         throw uniqueError(err);
       }
     },
 
-    async findUserByEmail(email) {
-      const r = await query(`SELECT ${USER_COLS} FROM dbo.Users WHERE Email = @email;`, { email: [sql.NVarChar(255), email] });
+    // "User Name" field on the login page accepts a nickname or an email
+    async findUserByLogin(login) {
+      const r = await query(`SELECT ${USER_COLS} FROM dbo.Users WHERE Email = @login OR Username = @login;`, {
+        login: [sql.NVarChar(255), login],
+      });
       return mapUser(r.recordset[0]) || null;
     },
 
@@ -156,11 +197,17 @@ function createMssqlRepo(dbConfig) {
       return mapUser(r.recordset[0]) || null;
     },
 
-    async updateUser(id, { username, email }) {
+    async updateUser(id, { username, email, realName }) {
       try {
         await query(
-          'UPDATE dbo.Users SET Username = @username, Email = @email, UpdatedAt = SYSUTCDATETIME() WHERE UserId = @id;',
-          { id: [sql.Int, id], username: [sql.NVarChar(32), username], email: [sql.NVarChar(255), email] },
+          `UPDATE dbo.Users SET Username = @username, Email = @email, RealName = @realName, UpdatedAt = SYSUTCDATETIME()
+           WHERE UserId = @id;`,
+          {
+            id: [sql.Int, id],
+            username: [sql.NVarChar(32), username],
+            email: [sql.NVarChar(255), email],
+            realName: [sql.NVarChar(100), realName],
+          },
         );
       } catch (err) {
         throw uniqueError(err);
@@ -176,6 +223,20 @@ function createMssqlRepo(dbConfig) {
       return this.findUserById(id);
     },
 
+    async setSpecialCode(id, codeHash) {
+      await query('UPDATE dbo.Users SET SpecialCodeHash = @hash, UpdatedAt = SYSUTCDATETIME() WHERE UserId = @id;', {
+        id: [sql.Int, id],
+        hash: [sql.NVarChar(255), codeHash],
+      });
+    },
+
+    async getAvatar(username) {
+      const r = await query('SELECT AvatarDataUrl FROM dbo.Users WHERE Username = @username;', {
+        username: [sql.NVarChar(32), username],
+      });
+      return r.recordset[0]?.AvatarDataUrl || null;
+    },
+
     async createSession(userId, tokenHash, expiresAt) {
       await query('INSERT INTO dbo.Sessions (UserId, TokenHash, ExpiresAt) VALUES (@id, @token, @exp);', {
         id: [sql.Int, userId],
@@ -186,7 +247,7 @@ function createMssqlRepo(dbConfig) {
 
     async findSessionUser(tokenHash) {
       const r = await query(
-        `SELECT u.UserId, u.Username, u.Email, u.PasswordHash, u.AvatarDataUrl, u.Balance, u.CreatedAt
+        `SELECT ${USER_COLS.split(', ').map((c) => 'u.' + c).join(', ')}
          FROM dbo.Sessions AS s JOIN dbo.Users AS u ON u.UserId = s.UserId
          WHERE s.TokenHash = @token AND s.ExpiresAt > SYSUTCDATETIME();`,
         { token: [sql.Char(64), tokenHash] },
@@ -203,7 +264,7 @@ function createMssqlRepo(dbConfig) {
     // ---------- Catalog ----------
     async listGames() {
       const r = await query(
-        `SELECT g.GameId, g.Name, g.Slug, g.Description, g.SortOrder,
+        `SELECT g.GameId, g.Name, g.Slug, g.Section, g.Description, g.SortOrder,
                 c.CategoryId, c.Name AS CategoryName, c.Slug AS CategorySlug, c.Kind,
                 (SELECT COUNT(*) FROM dbo.Listings l WHERE l.CategoryId = c.CategoryId AND l.Status = 'active') AS ActiveListings,
                 (SELECT MIN(l.Price) FROM dbo.Listings l WHERE l.CategoryId = c.CategoryId AND l.Status = 'active') AS MinPrice
@@ -215,7 +276,7 @@ function createMssqlRepo(dbConfig) {
       for (const row of r.recordset) {
         if (!games.has(row.GameId)) {
           games.set(row.GameId, {
-            gameId: row.GameId, name: row.Name, slug: row.Slug, description: row.Description,
+            gameId: row.GameId, name: row.Name, slug: row.Slug, section: row.Section, description: row.Description,
             activeListings: 0, minPrice: null, categories: [],
           });
         }
@@ -236,7 +297,7 @@ function createMssqlRepo(dbConfig) {
       if (game) { where.push('g.Slug = @game'); params.game = [sql.VarChar(50), game]; }
       if (category) { where.push('c.Slug = @category'); params.category = [sql.VarChar(50), category]; }
       if (sellerId) { where.push('l.SellerId = @sellerId'); params.sellerId = [sql.Int, sellerId]; }
-      if (q) { where.push('l.Title LIKE @q'); params.q = [sql.NVarChar(130), `%${likeEscape(q)}%`]; }
+      if (q) { where.push('(l.Title LIKE @q OR g.Name LIKE @q)'); params.q = [sql.NVarChar(130), `%${likeEscape(q)}%`]; }
       const r = await query(
         `${LISTING_SELECT.replace('SELECT', 'SELECT COUNT(*) OVER () AS Total,')}
          ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
@@ -252,15 +313,20 @@ function createMssqlRepo(dbConfig) {
       return r.recordset[0] ? mapListing(r.recordset[0]) : null;
     },
 
+    async getListingImage(id) {
+      const r = await query('SELECT ImageDataUrl FROM dbo.Listings WHERE ListingId = @id;', { id: [sql.Int, id] });
+      return r.recordset[0]?.ImageDataUrl || null;
+    },
+
     async getCategory(categoryId) {
       const r = await query('SELECT CategoryId FROM dbo.Categories WHERE CategoryId = @id;', { id: [sql.Int, categoryId] });
       return r.recordset[0] || null;
     },
 
-    async createListing(sellerId, { categoryId, title, description, price, quantity }) {
+    async createListing(sellerId, { categoryId, title, description, price, quantity, image = null }) {
       const r = await query(
-        `INSERT INTO dbo.Listings (SellerId, CategoryId, Title, Description, Price, Quantity)
-         OUTPUT INSERTED.ListingId VALUES (@seller, @cat, @title, @descr, @price, @qty);`,
+        `INSERT INTO dbo.Listings (SellerId, CategoryId, Title, Description, Price, Quantity, ImageDataUrl)
+         OUTPUT INSERTED.ListingId VALUES (@seller, @cat, @title, @descr, @price, @qty, @image);`,
         {
           seller: [sql.Int, sellerId],
           cat: [sql.Int, categoryId],
@@ -268,43 +334,50 @@ function createMssqlRepo(dbConfig) {
           descr: [sql.NVarChar(2000), description],
           price: [sql.Decimal(12, 2), price],
           qty: [sql.Int, quantity],
+          image: [sql.NVarChar(sql.MAX), image],
         },
       );
       return r.recordset[0].ListingId;
     },
 
-    // Only the owner can change a listing; a listing with quantity > 0 becomes active again
-    async updateListing(listingId, sellerId, { title, description, price, quantity, status }) {
+    // Only the owner can change a listing. image: undefined = keep, null = remove, string = replace.
+    async updateListing(listingId, sellerId, { categoryId, title, description, price, quantity, status, image }) {
       const r = await query(
         `UPDATE dbo.Listings
-         SET Title = @title, Description = @descr, Price = @price, Quantity = @qty,
+         SET CategoryId = @cat, Title = @title, Description = @descr, Price = @price, Quantity = @qty,
+             ImageDataUrl = CASE WHEN @keepImage = 1 THEN ImageDataUrl ELSE @image END,
              Status = CASE WHEN @status = 'closed' THEN 'closed' WHEN @qty = 0 THEN 'sold' ELSE 'active' END,
              UpdatedAt = SYSUTCDATETIME()
          WHERE ListingId = @id AND SellerId = @seller;`,
         {
           id: [sql.Int, listingId],
           seller: [sql.Int, sellerId],
+          cat: [sql.Int, categoryId],
           title: [sql.NVarChar(120), title],
           descr: [sql.NVarChar(2000), description],
           price: [sql.Decimal(12, 2), price],
           qty: [sql.Int, quantity],
           status: [sql.VarChar(10), status],
+          keepImage: [sql.Bit, image === undefined],
+          image: [sql.NVarChar(sql.MAX), image ?? null],
         },
       );
       return r.rowsAffected[0] > 0;
     },
 
-    // ---------- Sellers ----------
+    // ---------- Users (public profile: Account information) ----------
     async getSellerProfile(username) {
       const r = await query(
-        `SELECT UserId, Username, CreatedAt, SalesCount, ReviewsCount, AvgRating, ActiveListings
-         FROM dbo.vw_SellerStats WHERE Username = @username;`,
+        `SELECT UserId, Username, RealName, CreatedAt, SalesCount, DealsCount, ReviewsCount, AvgRating, ActiveListings, SocialCredit,
+                CASE WHEN EXISTS (SELECT 1 FROM dbo.Users u WHERE u.UserId = s.UserId AND u.AvatarDataUrl IS NOT NULL) THEN 1 ELSE 0 END AS HasAvatar
+         FROM dbo.vw_SellerStats AS s WHERE Username = @username;`,
         { username: [sql.NVarChar(32), username] },
       );
       const s = r.recordset[0];
       return s ? {
-        userId: s.UserId, username: s.Username, createdAt: s.CreatedAt, salesCount: s.SalesCount,
-        reviewsCount: s.ReviewsCount, avgRating: num(s.AvgRating), activeListings: s.ActiveListings,
+        userId: s.UserId, username: s.Username, realName: s.RealName, createdAt: s.CreatedAt, hasAvatar: !!s.HasAvatar,
+        salesCount: s.SalesCount, dealsCount: s.DealsCount, reviewsCount: s.ReviewsCount,
+        avgRating: num(s.AvgRating), activeListings: s.ActiveListings, socialCredit: s.SocialCredit,
       } : null;
     },
 
@@ -321,12 +394,60 @@ function createMssqlRepo(dbConfig) {
       return r.recordset.map((x) => ({ reviewId: x.ReviewId, rating: x.Rating, text: x.Text, createdAt: x.CreatedAt, author: x.AuthorName, title: x.Title }));
     },
 
+    // ---------- Conversations (chat) ----------
+    async getOrCreateConversation(listingId, buyerId) {
+      const r = await exec('dbo.usp_GetOrCreateConversation', { ListingId: [sql.Int, listingId], BuyerId: [sql.Int, buyerId] });
+      return r.recordset[0].ConversationId;
+    },
+
+    async getConversation(conversationId) {
+      const r = await query(`${CONVERSATION_SELECT} WHERE cv.ConversationId = @id;`, { id: [sql.Int, conversationId] });
+      return r.recordset[0] ? mapConversation(r.recordset[0]) : null;
+    },
+
+    async listConversations(userId) {
+      const r = await query(
+        `${CONVERSATION_SELECT} WHERE cv.BuyerId = @uid OR cv.SellerId = @uid ORDER BY cv.LastMessageAt DESC, cv.ConversationId DESC;`,
+        { uid: [sql.Int, userId] },
+      );
+      return r.recordset.map(mapConversation);
+    },
+
+    async listMessages(conversationId, afterId = 0) {
+      const r = await query(
+        `SELECT m.MessageId, m.Text, m.AttachmentDataUrl, m.CreatedAt, m.SenderId, u.Username
+         FROM dbo.Messages AS m LEFT JOIN dbo.Users AS u ON u.UserId = m.SenderId
+         WHERE m.ConversationId = @id AND m.MessageId > @after ORDER BY m.MessageId;`,
+        { id: [sql.Int, conversationId], after: [sql.BigInt, afterId] },
+      );
+      return r.recordset.map(mapMessage);
+    },
+
+    async addMessage(conversationId, senderId, text, attachment = null) {
+      await query(
+        `INSERT INTO dbo.Messages (ConversationId, SenderId, Text, AttachmentDataUrl) VALUES (@id, @sender, @text, @att);
+         UPDATE dbo.Conversations SET LastMessageAt = SYSUTCDATETIME() WHERE ConversationId = @id;`,
+        {
+          id: [sql.Int, conversationId], sender: [sql.Int, senderId],
+          text: [sql.NVarChar(1000), text], att: [sql.NVarChar(sql.MAX), attachment],
+        },
+      );
+    },
+
+    async requestSupport(conversationId) {
+      const r = await query(
+        'UPDATE dbo.Conversations SET SupportRequestedAt = SYSUTCDATETIME() WHERE ConversationId = @id AND SupportRequestedAt IS NULL;',
+        { id: [sql.Int, conversationId] },
+      );
+      if (r.rowsAffected[0] > 0) await systemMessage(conversationId, 'Support was called to this chat.');
+    },
+
     // ---------- Orders ----------
     async createOrder(buyerId, listingId, quantity) {
       const r = await exec('dbo.usp_CreateOrder', {
         BuyerId: [sql.Int, buyerId], ListingId: [sql.Int, listingId], Quantity: [sql.Int, quantity],
       });
-      return r.recordset[0].OrderId;
+      return { orderId: r.recordset[0].OrderId, conversationId: r.recordset[0].ConversationId };
     },
 
     async getOrder(orderId) {
@@ -340,6 +461,11 @@ function createMssqlRepo(dbConfig) {
       return r.recordset.map(mapOrder);
     },
 
+    async listConversationOrders(conversationId) {
+      const r = await query(`${ORDER_SELECT} WHERE o.ConversationId = @id ORDER BY o.OrderId DESC;`, { id: [sql.Int, conversationId] });
+      return r.recordset.map(mapOrder);
+    },
+
     async completeOrder(orderId, buyerId) {
       await exec('dbo.usp_CompleteOrder', { OrderId: [sql.Int, orderId], BuyerId: [sql.Int, buyerId] });
     },
@@ -350,26 +476,13 @@ function createMssqlRepo(dbConfig) {
 
     async disputeOrder(orderId, buyerId) {
       const r = await query(
-        "UPDATE dbo.Orders SET Status = 'disputed' WHERE OrderId = @id AND BuyerId = @buyer AND Status = 'paid';",
+        `UPDATE dbo.Orders SET Status = 'disputed' OUTPUT INSERTED.ConversationId
+         WHERE OrderId = @id AND BuyerId = @buyer AND Status = 'paid';`,
         { id: [sql.Int, orderId], buyer: [sql.Int, buyerId] },
       );
-      return r.rowsAffected[0] > 0;
-    },
-
-    async listMessages(orderId) {
-      const r = await query(
-        `SELECT m.MessageId, m.Text, m.CreatedAt, m.SenderId, u.Username
-         FROM dbo.Messages AS m JOIN dbo.Users AS u ON u.UserId = m.SenderId
-         WHERE m.OrderId = @id ORDER BY m.MessageId;`,
-        { id: [sql.Int, orderId] },
-      );
-      return r.recordset.map((m) => ({ messageId: m.MessageId, text: m.Text, createdAt: m.CreatedAt, sender: { userId: m.SenderId, username: m.Username } }));
-    },
-
-    async addMessage(orderId, senderId, text) {
-      await query('INSERT INTO dbo.Messages (OrderId, SenderId, Text) VALUES (@id, @sender, @text);', {
-        id: [sql.Int, orderId], sender: [sql.Int, senderId], text: [sql.NVarChar(1000), text],
-      });
+      if (!r.recordset.length) return false;
+      await systemMessage(r.recordset[0].ConversationId, `Order #${orderId}: the buyer opened a dispute. Support will join the chat.`);
+      return true;
     },
 
     async addReview(orderId, authorId, sellerId, rating, text) {
@@ -379,7 +492,7 @@ function createMssqlRepo(dbConfig) {
           { id: [sql.Int, orderId], author: [sql.Int, authorId], seller: [sql.Int, sellerId], rating: [sql.TinyInt, rating], text: [sql.NVarChar(1000), text] },
         );
       } catch (err) {
-        if (err.number === 2627 || err.number === 2601) err.code = 'REVIEW_EXISTS';
+        if (isUnique(err)) err.code = 'REVIEW_EXISTS';
         throw err;
       }
     },
@@ -397,6 +510,32 @@ function createMssqlRepo(dbConfig) {
     async deposit(userId, amount) {
       const r = await exec('dbo.usp_Deposit', { UserId: [sql.Int, userId], Amount: [sql.Decimal(12, 2), amount] });
       return Number(r.recordset[0].Balance);
+    },
+
+    // ---------- News & exchange rates ----------
+    async listNews(limit = 20) {
+      const r = await query(
+        `SELECT TOP (@limit) n.NewsId, n.Title, n.Body, n.PublishedAt, u.Username AS AuthorName
+         FROM dbo.News AS n LEFT JOIN dbo.Users AS u ON u.UserId = n.AuthorId ORDER BY n.PublishedAt DESC;`,
+        { limit: [sql.Int, limit] },
+      );
+      return r.recordset.map((n) => ({ newsId: n.NewsId, title: n.Title, body: n.Body, publishedAt: n.PublishedAt, author: n.AuthorName }));
+    },
+
+    async getRates() {
+      const r = await query('SELECT CurrencyCode, RateRub, UpdatedAt FROM dbo.ExchangeRates ORDER BY CurrencyCode;');
+      return r.recordset.map((x) => ({ code: x.CurrencyCode, rate: Number(x.RateRub), updatedAt: x.UpdatedAt }));
+    },
+
+    async saveRates(rates) {
+      for (const { code, rate } of rates) {
+        await query(
+          `MERGE dbo.ExchangeRates AS t USING (SELECT @code AS CurrencyCode) AS s ON t.CurrencyCode = s.CurrencyCode
+           WHEN MATCHED THEN UPDATE SET RateRub = @rate, UpdatedAt = SYSUTCDATETIME()
+           WHEN NOT MATCHED THEN INSERT (CurrencyCode, RateRub) VALUES (@code, @rate);`,
+          { code: [sql.Char(3), code], rate: [sql.Decimal(12, 4), rate] },
+        );
+      }
     },
 
     async close() {
