@@ -1,0 +1,8 @@
+{
+  "recommendations": [
+    "ms-mssql.mssql",
+    "ms-azuretools.vscode-docker",
+    "github.vscode-github-actions",
+    "redhat.vscode-yaml"
+  ]
+}

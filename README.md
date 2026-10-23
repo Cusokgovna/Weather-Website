@@ -1,77 +1,72 @@
-# Weather — сайт погоды
+# Kraken Shop
 
 ![build](https://github.com/cusokgovna/weather-website/actions/workflows/build.yml/badge.svg)
 
-Сайт прогноза погоды: текущая погода, прогноз на 24 часа с графиком, на 7 дней, индекс качества воздуха. Пользователи регистрируются, сохраняют избранные города, видят историю поиска; тема оформления хранится в профиле.
+**Биржа игровых ценностей**: предметы, валюта, аккаунты и услуги для 16 игр, подарочные карты и подписки. Безопасные сделки с заморозкой денег, чат с продавцом, отзывы, рейтинг и «Social credit».
+Учебный проект ОПВ.15 (Express + Microsoft SQL Server + Docker + GitHub Actions).
 
-**Стек:** HTML/CSS/JS (фронтенд) · Node.js 22 + Express 5 (бэкенд, API) · **Microsoft SQL Server 2022** (база данных, SSMS) · Docker · GitHub Actions + GHCR.
+📘 **Полное пошаговое руководство (VS Code / Visual Studio, SSMS, Docker, GitHub, как продолжать разработку): [docs/INSTRUCTIONS.md](docs/INSTRUCTIONS.md)**
 
-📘 **Пошаговая инструкция (SSMS, VS Code / Visual Studio, Docker, GitHub): [docs/INSTRUCTIONS.md](docs/INSTRUCTIONS.md)**
+| Главная | Игра | Чат сделки | Account information |
+|---|---|---|---|
+| ![](docs/ui/01-home.png) | ![](docs/ui/02-catalog-stalzone.png) | ![](docs/ui/08-chat.png) | ![](docs/ui/06-account.png) |
 
 ## Быстрый старт
 
+Нужен **Node.js 22+**.
+
 ```bash
 npm install
-copy .env.example .env        # заполнить OPENWEATHER_KEY и DB_* (см. инструкцию)
-# создать базу: выполнить database/01..03 в SSMS или
-npm run db:init
-npm start                     # http://localhost:3000
+npm run demo          # без базы данных, данные в памяти → http://localhost:3000  (вход: demo / demo1234)
 ```
 
-Всё в Docker (сайт + SQL Server в контейнере, нужен только `DB_PASSWORD` и `OPENWEATHER_KEY` в `.env`):
+С настоящей базой SQL Server:
+1. В SSMS выполните `database/01…04` и `06_app_login.sql` (подставьте свой пароль) — раздел 4 руководства.
+2. `copy .env.example .env` и впишите пароль в `DB_PASSWORD`.
+3. `npm start` (или F5 в VS Code → «Kraken Shop: run with SQL Server (.env)»).
 
+Всё в Docker (сайт + SQL Server 2022, в `.env` нужен только `DB_PASSWORD`):
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.db.yml up --build
 ```
 
-Демо-пользователь из `03_seed.sql`: `demo@example.com` / `demo1234`.
+Тесты: `npm test`.
 
-## Архитектура
+## Демо-аккаунты (из `04_seed.sql`, пароль у всех `demo1234`)
 
-```
-Браузер ──► Express (server/app.js)
-              ├─ /           статические страницы из public/  (/, /faq, /profile, robots.txt, sitemap.xml)
-              ├─ /api/auth   регистрация, вход, выход (сессия в HttpOnly cookie)
-              ├─ /api/users  профиль, аватар, настройки
-              ├─ /api/favorites, /api/history
-              └─ /api/ow     прокси к OpenWeather — ключ хранится только на сервере
-                       │
-                       ▼
-              Microsoft SQL Server — база WeatherDb (server/mssqlRepo.js, параметризованные запросы)
-```
-
-| Папка / файл | Содержимое |
+| Логин | Роль |
 |---|---|
-| `public/` | фронтенд |
-| `server/` | бэкенд: `app.js` (маршруты), `mssqlRepo.js` (SQL), `memoryRepo.js` (для тестов), `auth.js` (scrypt, сессии) |
-| `database/` | SQL-скрипты: создание БД, таблицы, тестовые данные, запросы, логин приложения |
-| `tests/` | автотесты (`npm test`) |
-| `docs/database/` | ER-диаграмма и описание таблиц |
-| `docs/seo/` | замеры Lighthouse до/после, описание SEO-работ |
-| `docs/pull-requests.md` | работа с Pull Request |
+| `demo` | покупатель: баланс, сделки, чаты |
+| `KrakenTrader` | продавец с отзывом 5 ☆ |
+| `SkinMaster` | продавец |
+| `NightMarket` | продавец с возвратом (отрицательный Social credit) |
+| `KrakenTeam` | автор новостей |
+
+## Что где лежит
+
+| Путь | Что это |
+|---|---|
+| `server/app.js` | адреса сайта и API, проверки прав |
+| `server/views.js`, `server/html.js` | HTML страниц по макету Kraken Shop |
+| `server/mssqlRepo.js` | запросы к SQL Server; `memoryRepo.js` — то же в памяти (тесты, демо) |
+| `public/` | стили, скрипты страниц, картинки, `robots.txt` |
+| `database/` | SQL-скрипты для SSMS: база, 12 таблиц, процедуры, тестовые данные, запросы, логин приложения |
+| `tests/` | автотесты (`node --test`): API, страницы, SEO, безопасность; те же сценарии — на настоящем SQL Server в CI |
 | `Dockerfile`, `.dockerignore`, `docker-compose*.yml` | контейнеризация |
-| `.github/workflows/build.yml` | CI: тесты → тесты на SQL Server → сборка и публикация образа в GHCR |
+| `.github/workflows/build.yml` | CI: тесты → тесты на SQL Server → образ в GHCR |
+| `docs/` | руководство, ER-диаграмма, скриншоты, SEO, Pull Requests |
 
-## API
+## Страницы
 
-| Метод и путь | Описание |
-|---|---|
-| `GET /api/health` | состояние сервера и подключения к БД |
-| `POST /api/auth/register` · `POST /api/auth/login` · `POST /api/auth/logout` · `GET /api/auth/me` | аккаунт |
-| `PUT /api/users/me` · `PUT /api/users/me/avatar` | имя/email, аватар |
-| `GET/PUT /api/users/me/settings` | тема, единицы, язык |
-| `GET/POST /api/favorites` · `DELETE /api/favorites/:cityId` | избранные города |
-| `GET/POST /api/history` | история поиска |
-| `GET /api/ow?path=/data/2.5/weather&lat=..&lon=..` | прокси OpenWeather (разрешённые пути: geo direct/reverse, weather, forecast, air_pollution) |
+`/` главная · `/games/:slug`, `/services/:slug` каталог · `/categories` · `/listings/:id` лот · `/users/:nick` профиль продавца ·
+`/login`, `/register` · `/account` · `/sell` · `/deals` · `/chat`, `/chat/:id` · `/news` · `/faq` · `/about` · `/contacts` · `/privacy` · `/rules` · `/search`
 
-Все ответы `/api/*` содержат заголовок `X-Robots-Tag: noindex, nofollow`.
+## API (кратко)
 
-## Безопасность
+`/api/auth/*` (register, login, logout, me) · `/api/users/me` (+ `/avatar`, `/special-code`) · `/api/users/:nick` ·
+`/api/games` · `/api/listings` · `/api/conversations` (+ `/messages`, `/support`) · `/api/orders` (+ `/confirm`, `/dispute`, `/refund`, `/review`) ·
+`/api/wallet` (+ `/deposit`) · `/api/news` · `/api/rates` · `/api/health`. Все ответы API — с `X-Robots-Tag: noindex, nofollow`.
 
-- Секреты (ключ OpenWeather, пароль БД) — только в `.env` (в `.gitignore` и `.dockerignore`) и в GitHub Secrets.
-- Пароли хранятся как хеш scrypt с солью; в БД сессий — только SHA-256 от токена.
-- Все SQL-запросы параметризованы; у приложения отдельный логин с правами `db_datareader` + `db_datawriter`.
+## Безопасность (коротко)
 
----
-
-Made by Zhanakhmet Abdulaziz and Tauken Ruslan.
+Секреты только в `.env` (в Git и Docker не попадает). Пароли и Special code — хеш scrypt. SQL только с параметрами. HTML экранируется, CSP без inline-скриптов. Чат и сделку видят только участники. Деньги двигаются в хранимых процедурах с транзакциями. Подробно — раздел 10 руководства.

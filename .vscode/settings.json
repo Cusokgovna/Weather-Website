@@ -1,5 +1,8 @@
 {
   "yaml.schemas": {
     "https://json.schemastore.org/github-workflow.json": ".github/workflows/*"
-  }
+  },
+  "files.associations": { "*.sql": "sql" },
+  "files.exclude": { "**/node_modules": true },
+  "editor.tabSize": 2
 }

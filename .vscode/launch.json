@@ -1,0 +1,32 @@
+{
+  // Run and Debug (Ctrl+Shift+D) → choose a configuration → F5
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Kraken Shop: demo without SQL Server",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/server/index.js",
+      "args": ["--memory"],
+      "console": "integratedTerminal",
+      "skipFiles": ["<node_internals>/**"]
+    },
+    {
+      "name": "Kraken Shop: run with SQL Server (.env)",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/server/index.js",
+      "console": "integratedTerminal",
+      "skipFiles": ["<node_internals>/**"]
+    },
+    {
+      "name": "Tests (npm test)",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["test"],
+      "console": "integratedTerminal",
+      "skipFiles": ["<node_internals>/**"]
+    }
+  ]
+}

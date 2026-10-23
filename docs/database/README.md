@@ -1,48 +1,58 @@
-# База данных WeatherDb (Microsoft SQL Server)
+# База данных KrakenShop (Microsoft SQL Server)
 
-Реляционная база данных для сайта погоды. СУБД — **Microsoft SQL Server 2022** (Express / Developer или контейнер Docker), управление — **SQL Server Management Studio (SSMS)**.
+Реляционная база биржи игровых ценностей. СУБД — **Microsoft SQL Server 2022** (Express / Developer или контейнер Docker), управление — **SQL Server Management Studio (SSMS)**.
 
 ## ER-диаграмма
 
 ![ER-диаграмма](er-diagram.png)
 
-Исходник диаграммы — [`er-diagram.mmd`](er-diagram.mmd) (Mermaid, GitHub рисует его сам), векторная версия — [`er-diagram.svg`](er-diagram.svg).
-В Mermaid нельзя писать запятую в типе, поэтому `DECIMAL(8_4)` означает `DECIMAL(8,4)`.
+Исходник — [`er-diagram.mmd`](er-diagram.mmd) (Mermaid: GitHub рисует его сам; в draw.io — *Arrange → Insert → Advanced → Mermaid*), векторная версия — [`er-diagram.svg`](er-diagram.svg).
+В Mermaid нельзя писать запятую в типе, поэтому `DECIMAL(12_2)` означает `DECIMAL(12,2)`.
 
-```mermaid
-erDiagram
-    Users ||--|| UserSettings : "has settings"
-    Users ||--o{ Sessions : "signs in"
-    Users ||--o{ FavoriteCities : "adds"
-    Cities ||--o{ FavoriteCities : "is favorite"
-    Users ||--o{ SearchHistory : "searches"
-    Cities ||--o{ SearchHistory : "is searched"
-    Cities ||--o{ WeatherSnapshots : "has measurements"
-```
-
-## Таблицы
+## Таблицы (12)
 
 | Таблица | Назначение | Ключи и связи |
 |---|---|---|
-| `Users` | Пользователи сайта: имя, email, хеш пароля (scrypt), аватар | PK `UserId`, UNIQUE `Email` |
-| `UserSettings` | Тема (dark/light), единицы, язык | PK/FK `UserId` → Users, связь **1 : 1** |
-| `Sessions` | Сессии входа (в cookie лежит токен, в БД — только его SHA-256) | FK `UserId` → Users, **1 : N** |
-| `Cities` | Справочник городов (из OpenWeather Geocoding) | PK `CityId`, UNIQUE (`Latitude`, `Longitude`) |
-| `FavoriteCities` | Избранные города пользователя | составной PK (`UserId`, `CityId`), связь **N : M** Users ↔ Cities |
-| `SearchHistory` | История поиска городов | FK `UserId` → Users, FK `CityId` → Cities |
-| `WeatherSnapshots` | Сохранённые замеры погоды (каждый запрос текущей погоды через сервер) | FK `CityId` → Cities, **1 : N** |
+| `Users` | Пользователи: Nickname, email, хеш пароля (scrypt), хеш Special code, Real name, аватар, баланс | PK `UserId`; UNIQUE `Username`, `Email`; CHECK `Balance >= 0` |
+| `Sessions` | Сессии входа (в cookie токен, в БД — только SHA-256) | FK `UserId` → Users (CASCADE), **1 : N** |
+| `Games` | Игры и сервисы из левого меню (`Section` = game / service) | PK `GameId`; UNIQUE `Name`, `Slug` |
+| `Categories` | Разделы игры: предметы, валюта, аккаунты, услуги, подарочные карты, приложения | FK `GameId` → Games (CASCADE), **1 : N**; UNIQUE (`GameId`, `Slug`) |
+| `Listings` | Лоты (offers): цена, количество, картинка, статус | FK `SellerId` → Users, FK `CategoryId` → Categories |
+| `Conversations` | Чат покупателя с продавцом по лоту («TO CHAT», «CALL SUPPORT») | FK → Listings, Users (покупатель и продавец); UNIQUE (`ListingId`, `BuyerId`) |
+| `Messages` | Сообщения чата, картинки, системные сообщения (`SenderId` = NULL) | FK `ConversationId` → Conversations, **1 : N** |
+| `Orders` | Сделки; `TotalPrice` — вычисляемый столбец | FK → Listings, Conversations, Users (покупатель и продавец); CHECK покупатель ≠ продавец |
+| `Transactions` | Движение денег: пополнение, покупка, продажа, возврат + баланс после операции | FK → Users, Orders (NULL для пополнения) |
+| `Reviews` | Отзыв покупателя (1–5 ☆) | FK → Orders (UNIQUE: **1 : 0..1**), Users |
+| `News` | Новости сайта | FK `AuthorId` → Users |
+| `ExchangeRates` | Курсы EUR / USD для полосы «Exchange rate» | PK `CurrencyCode` |
 
-Дополнительно: представление `vw_CityLatestWeather` (последний замер по каждому городу), CHECK-ограничения (тема, координаты, влажность, email), индексы под частые запросы, `ON DELETE CASCADE` у всех внешних ключей.
+**Связи многие-ко-многим** реализованы через промежуточные таблицы: пользователи ↔ лоты через `Orders` (покупки) и через `Conversations` (чаты).
+**Самосвязь пользователей** — в `Orders` и `Conversations` два внешних ключа на `Users` (покупатель и продавец).
+
+**Представление** `vw_SellerStats` — статистика для страницы «Account information»: продажи, сделки, отзывы, средний рейтинг, активные лоты и **Social credit** = 10 × завершённые сделки + 20 × (сумма звёзд сверх 3) − 100 × сделки продавца со спором или возвратом.
+
+**Хранимые процедуры** (`03_procedures.sql`) — все операции с деньгами выполняются в одной транзакции с блокировками `UPDLOCK, HOLDLOCK`:
+
+| Процедура | Что делает | Ошибки |
+|---|---|---|
+| `usp_CreateOrder` | списывает деньги покупателя (заморозка), уменьшает количество в лоте, создаёт сделку, запись в кошельке и системное сообщение в чате | 50001 лот недоступен, 50002 свой лот, 50003 нет количества, 50004 мало денег |
+| `usp_CompleteOrder` | покупатель подтвердил получение → деньги продавцу | 50005, 50006 |
+| `usp_RefundOrder` | продавец вернул деньги → товар снова в продаже | 50005, 50006 |
+| `usp_Deposit` | пополнение баланса (учебное, без платёжной системы) | 50007 |
+| `usp_GetOrCreateConversation` | найти или создать чат по лоту | 50001, 50002 |
+
+Каскадное удаление включено только для `Sessions` и `Categories`: сделки и деньги нельзя удалять вместе с пользователем, а SQL Server запрещает несколько каскадных путей к одной таблице.
 
 ## Скрипты (папка `database/`)
 
 | Файл | Что делает |
 |---|---|
-| `01_create_database.sql` | создаёт базу `WeatherDb` |
-| `02_schema.sql` | создаёт таблицы, ключи, ограничения, индексы, представление |
-| `03_seed.sql` | тестовые данные (демо-пользователь `demo@example.com` / `demo1234`, 5 городов, избранное, история, замеры) |
-| `04_queries.sql` | запросы для проверки и скриншотов (JOIN, GROUP BY, представление) |
-| `05_app_login.sql` | отдельный логин `weather_app` с правами только на чтение/запись данных |
+| `01_create_database.sql` | создаёт базу `KrakenShop` |
+| `02_schema.sql` | 12 таблиц, ключи, ограничения, индексы, представление |
+| `03_procedures.sql` | хранимые процедуры |
+| `04_seed.sql` | тестовые данные: 16 игр + 2 сервиса, 48 разделов, 5 пользователей, 18 лотов, 4 чата, 3 сделки, отзыв, 3 новости, курсы |
+| `05_queries.sql` | запросы для проверки и отчёта (JOIN, GROUP BY, представление, проверка целостности кошелька) |
+| `06_app_login.sql` | логин `kraken_app`: чтение и запись данных + запуск процедур, без права менять структуру |
 
-Все скрипты идемпотентные — их можно запускать повторно. Скрипты 01–03 можно выполнить в SSMS вручную или командой `npm run db:init`.
-Пошаговая инструкция — в [`docs/INSTRUCTIONS.md`](../INSTRUCTIONS.md).
+Все скрипты идемпотентные. Порядок: 01 → 02 → 03 → 04 → 06. Скрипты 01–04 также выполняет `npm run db:init` и job `db-test` в GitHub Actions.
+Пошаговая инструкция — [`docs/INSTRUCTIONS.md`](../INSTRUCTIONS.md), раздел 4.

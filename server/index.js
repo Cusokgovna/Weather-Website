@@ -6,7 +6,7 @@ const { createMemoryRepo } = require('./memoryRepo');
 
 const repo = config.dbDriver === 'memory' ? createMemoryRepo({ demoData: true }) : createMssqlRepo(config.db);
 
-if (repo.kind === 'memory') console.warn('WARNING: DB_DRIVER=memory — demo data is kept in RAM and lost on restart.');
+if (repo.kind === 'memory') console.warn('WARNING: demo mode without SQL Server — data is kept in RAM and lost on restart.');
 
 const app = createApp({ repo, cookieSecure: config.cookieSecure, siteUrl: config.siteUrl });
 

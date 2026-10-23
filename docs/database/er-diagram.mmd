@@ -3,21 +3,26 @@ erDiagram
     Games ||--o{ Categories : "содержит"
     Categories ||--o{ Listings : "включает"
     Users ||--o{ Listings : "продаёт"
+    Listings ||--o{ Conversations : "обсуждают"
+    Users ||--o{ Conversations : "покупатель / продавец"
+    Conversations ||--o{ Messages : "содержит"
+    Users |o--o{ Messages : "пишет (NULL = система)"
+    Conversations ||--o{ Orders : "сделки в чате"
     Listings ||--o{ Orders : "покупают"
-    Users ||--o{ Orders : "покупатель"
-    Users ||--o{ Orders : "продавец"
-    Orders ||--o{ Messages : "чат"
-    Users ||--o{ Messages : "пишет"
+    Users ||--o{ Orders : "покупатель / продавец"
     Orders ||--o| Reviews : "отзыв"
     Users ||--o{ Reviews : "автор / продавец"
     Users ||--o{ Transactions : "кошелёк"
-    Orders ||--o{ Transactions : "оплата"
+    Orders |o--o{ Transactions : "оплата"
+    Users |o--o{ News : "автор"
 
     Users {
         INT UserId PK
-        NVARCHAR(32) Username UK
+        NVARCHAR(32) Username UK "Nickname"
         NVARCHAR(255) Email UK
-        NVARCHAR(255) PasswordHash
+        NVARCHAR(255) PasswordHash "scrypt"
+        NVARCHAR(255) SpecialCodeHash "NULL"
+        NVARCHAR(100) RealName "NULL"
         NVARCHAR(MAX) AvatarDataUrl "NULL"
         DECIMAL(12_2) Balance ">= 0"
         DATETIME2 CreatedAt
@@ -34,6 +39,7 @@ erDiagram
         INT GameId PK
         NVARCHAR(100) Name UK
         VARCHAR(50) Slug UK
+        VARCHAR(10) Section "game | service"
         NVARCHAR(500) Description "NULL"
         INT SortOrder
     }
@@ -42,7 +48,7 @@ erDiagram
         INT GameId FK
         NVARCHAR(100) Name
         VARCHAR(50) Slug "UK with GameId"
-        VARCHAR(10) Kind "item|currency|account|service"
+        VARCHAR(10) Kind "item|currency|account|service|giftcard|app"
     }
     Listings {
         INT ListingId PK
@@ -52,13 +58,32 @@ erDiagram
         NVARCHAR(2000) Description "NULL"
         DECIMAL(12_2) Price "> 0"
         INT Quantity ">= 0"
+        NVARCHAR(MAX) ImageDataUrl "NULL"
         VARCHAR(10) Status "active|sold|closed"
         DATETIME2 CreatedAt
         DATETIME2 UpdatedAt
     }
+    Conversations {
+        INT ConversationId PK
+        INT ListingId FK "UK with BuyerId"
+        INT BuyerId FK
+        INT SellerId FK
+        DATETIME2 SupportRequestedAt "NULL"
+        DATETIME2 CreatedAt
+        DATETIME2 LastMessageAt
+    }
+    Messages {
+        BIGINT MessageId PK
+        INT ConversationId FK
+        INT SenderId FK "NULL"
+        NVARCHAR(1000) Text "NULL"
+        NVARCHAR(MAX) AttachmentDataUrl "NULL"
+        DATETIME2 CreatedAt
+    }
     Orders {
         INT OrderId PK
         INT ListingId FK
+        INT ConversationId FK
         INT BuyerId FK
         INT SellerId FK
         INT Quantity
@@ -86,10 +111,15 @@ erDiagram
         NVARCHAR(1000) Text "NULL"
         DATETIME2 CreatedAt
     }
-    Messages {
-        BIGINT MessageId PK
-        INT OrderId FK
-        INT SenderId FK
-        NVARCHAR(1000) Text
-        DATETIME2 CreatedAt
+    News {
+        INT NewsId PK
+        INT AuthorId FK "NULL"
+        NVARCHAR(200) Title
+        NVARCHAR(4000) Body
+        DATETIME2 PublishedAt
+    }
+    ExchangeRates {
+        CHAR(3) CurrencyCode PK
+        DECIMAL(12_4) RateRub
+        DATETIME2 UpdatedAt
     }
