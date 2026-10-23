@@ -1,26 +1,27 @@
 erDiagram
-    Users ||--|| UserSettings : "has settings"
-    Users ||--o{ Sessions : "signs in"
-    Users ||--o{ FavoriteCities : "adds"
-    Cities ||--o{ FavoriteCities : "is favorite"
-    Users ||--o{ SearchHistory : "searches"
-    Cities ||--o{ SearchHistory : "is searched"
-    Cities ||--o{ WeatherSnapshots : "has measurements"
+    Users ||--o{ Sessions : "входит"
+    Games ||--o{ Categories : "содержит"
+    Categories ||--o{ Listings : "включает"
+    Users ||--o{ Listings : "продаёт"
+    Listings ||--o{ Orders : "покупают"
+    Users ||--o{ Orders : "покупатель"
+    Users ||--o{ Orders : "продавец"
+    Orders ||--o{ Messages : "чат"
+    Users ||--o{ Messages : "пишет"
+    Orders ||--o| Reviews : "отзыв"
+    Users ||--o{ Reviews : "автор / продавец"
+    Users ||--o{ Transactions : "кошелёк"
+    Orders ||--o{ Transactions : "оплата"
 
     Users {
         INT UserId PK
-        NVARCHAR(100) Name
+        NVARCHAR(32) Username UK
         NVARCHAR(255) Email UK
         NVARCHAR(255) PasswordHash
         NVARCHAR(MAX) AvatarDataUrl "NULL"
+        DECIMAL(12_2) Balance ">= 0"
         DATETIME2 CreatedAt
         DATETIME2 UpdatedAt
-    }
-    UserSettings {
-        INT UserId PK,FK
-        NVARCHAR(10) Theme "dark | light"
-        NVARCHAR(10) Units "metric | imperial"
-        NVARCHAR(5) Language
     }
     Sessions {
         INT SessionId PK
@@ -29,35 +30,66 @@ erDiagram
         DATETIME2 CreatedAt
         DATETIME2 ExpiresAt
     }
-    Cities {
-        INT CityId PK
-        NVARCHAR(150) Name
-        NVARCHAR(2) Country "NULL"
-        NVARCHAR(150) State "NULL"
-        DECIMAL(8_4) Latitude UK
-        DECIMAL(8_4) Longitude UK
+    Games {
+        INT GameId PK
+        NVARCHAR(100) Name UK
+        VARCHAR(50) Slug UK
+        NVARCHAR(500) Description "NULL"
+        INT SortOrder
+    }
+    Categories {
+        INT CategoryId PK
+        INT GameId FK
+        NVARCHAR(100) Name
+        VARCHAR(50) Slug "UK with GameId"
+        VARCHAR(10) Kind "item|currency|account|service"
+    }
+    Listings {
+        INT ListingId PK
+        INT SellerId FK
+        INT CategoryId FK
+        NVARCHAR(120) Title
+        NVARCHAR(2000) Description "NULL"
+        DECIMAL(12_2) Price "> 0"
+        INT Quantity ">= 0"
+        VARCHAR(10) Status "active|sold|closed"
+        DATETIME2 CreatedAt
+        DATETIME2 UpdatedAt
+    }
+    Orders {
+        INT OrderId PK
+        INT ListingId FK
+        INT BuyerId FK
+        INT SellerId FK
+        INT Quantity
+        DECIMAL(12_2) UnitPrice
+        DECIMAL(12_2) TotalPrice "computed"
+        VARCHAR(10) Status "paid|completed|disputed|refunded"
+        DATETIME2 CreatedAt
+        DATETIME2 ClosedAt "NULL"
+    }
+    Transactions {
+        BIGINT TransactionId PK
+        INT UserId FK
+        INT OrderId FK "NULL"
+        DECIMAL(12_2) Amount
+        VARCHAR(10) Type "deposit|purchase|sale|refund"
+        DECIMAL(12_2) BalanceAfter
         DATETIME2 CreatedAt
     }
-    FavoriteCities {
-        INT UserId PK,FK
-        INT CityId PK,FK
-        DATETIME2 AddedAt
+    Reviews {
+        INT ReviewId PK
+        INT OrderId FK,UK
+        INT AuthorId FK
+        INT SellerId FK
+        TINYINT Rating "1..5"
+        NVARCHAR(1000) Text "NULL"
+        DATETIME2 CreatedAt
     }
-    SearchHistory {
-        BIGINT SearchId PK
-        INT UserId FK
-        INT CityId FK
-        DATETIME2 SearchedAt
-    }
-    WeatherSnapshots {
-        BIGINT SnapshotId PK
-        INT CityId FK
-        DATETIME2 ObservedAt
-        DECIMAL(5_2) TempC
-        DECIMAL(5_2) FeelsLikeC "NULL"
-        TINYINT Humidity "NULL"
-        SMALLINT PressureHPa "NULL"
-        DECIMAL(5_2) WindSpeedMs "NULL"
-        NVARCHAR(100) Description "NULL"
-        NVARCHAR(10) Icon "NULL"
+    Messages {
+        BIGINT MessageId PK
+        INT OrderId FK
+        INT SenderId FK
+        NVARCHAR(1000) Text
+        DATETIME2 CreatedAt
     }

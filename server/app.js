@@ -1,4 +1,4 @@
-// Express application: JSON API (/api/*) + static frontend from /public.
+// Express application: JSON API (/api/*) + pages from /public.
 // createApp() does not listen on a port and does not connect to the DB by itself,
 // so tests can create it with an in-memory repository.
 const path = require('node:path');
@@ -7,43 +7,46 @@ const {
   SESSION_COOKIE, SESSION_TTL_MS, hashPassword, verifyPassword, newSessionToken, hashToken, parseCookies,
 } = require('./auth');
 
-const OPENWEATHER_BASE = 'https://api.openweathermap.org';
-// Only these OpenWeather endpoints and query params can be requested through the proxy.
-const OW_PATHS = new Set(['/geo/1.0/direct', '/geo/1.0/reverse', '/data/2.5/weather', '/data/2.5/forecast', '/data/2.5/air_pollution']);
-const OW_PARAMS = ['q', 'limit', 'lat', 'lon', 'units', 'lang'];
-
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const round4 = (n) => Math.round(n * 10000) / 10000;
+const USERNAME_RE = /^[A-Za-z0-9_]{3,32}$/;
+const SORTS = ['new', 'price_asc', 'price_desc'];
+
+// Error numbers thrown by stored procedures (database/03_procedures.sql) → HTTP status
+const DOMAIN_STATUS = { 50001: 409, 50002: 400, 50003: 409, 50004: 409, 50005: 404, 50006: 409, 50007: 400 };
 
 class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
 
-const publicUser = (u) => ({ id: u.id, name: u.name, email: u.email, avatar: u.avatar || null });
+const publicUser = (u) => ({ id: u.id, username: u.username, email: u.email, avatar: u.avatar || null, balance: u.balance });
+const toInt = (v) => (/^\d{1,9}$/.test(String(v)) ? Number(v) : NaN);
+const money = (v) => Math.round(Number(v) * 100) / 100;
 
-function validateProfile(body) {
-  const name = String(body?.name ?? '').trim();
+function validateAccount(body) {
+  const username = String(body?.username ?? '').trim();
   const email = String(body?.email ?? '').trim().toLowerCase();
-  if (name.length < 2 || name.length > 100) throw new HttpError(400, 'Name must be 2–100 characters');
-  if (!EMAIL_RE.test(email) || email.length > 255) throw new HttpError(400, 'Invalid email');
-  return { name, email };
+  if (!USERNAME_RE.test(username)) throw new HttpError(400, 'Логин: 3–32 символа, латинские буквы, цифры и _');
+  if (!EMAIL_RE.test(email) || email.length > 255) throw new HttpError(400, 'Некорректный email');
+  return { username, email };
 }
 
-function validateCity(body) {
-  const name = String(body?.name ?? '').trim();
-  const lat = Number(body?.lat);
-  const lon = Number(body?.lon);
-  if (!name || name.length > 150) throw new HttpError(400, 'City name is required');
-  if (!Number.isFinite(lat) || lat < -90 || lat > 90) throw new HttpError(400, 'Invalid latitude');
-  if (!Number.isFinite(lon) || lon < -180 || lon > 180) throw new HttpError(400, 'Invalid longitude');
-  const country = body?.country ? String(body.country).trim().toUpperCase().slice(0, 2) : null;
-  const state = body?.state ? String(body.state).trim().slice(0, 150) : null;
-  return { name, country, state, lat: round4(lat), lon: round4(lon) };
+function validateListing(body) {
+  const title = String(body?.title ?? '').trim();
+  const description = String(body?.description ?? '').trim();
+  const price = money(body?.price);
+  const quantity = Number(body?.quantity);
+  if (title.length < 3 || title.length > 120) throw new HttpError(400, 'Название: от 3 до 120 символов');
+  if (description.length > 2000) throw new HttpError(400, 'Описание: не больше 2000 символов');
+  if (!(price >= 1 && price <= 10_000_000)) throw new HttpError(400, 'Цена: от 1 до 10 000 000 ₽');
+  if (!Number.isInteger(quantity) || quantity < 0 || quantity > 100_000) throw new HttpError(400, 'Количество: целое число от 0 до 100 000');
+  return { title, description: description || null, price, quantity };
 }
 
-function createApp({ repo, openWeatherKey = '', cookieSecure = false, fetchImpl = fetch, publicDir = path.join(__dirname, '..', 'public') }) {
+function createApp({ repo, cookieSecure = false, siteUrl = 'https://example.com', publicDir = path.join(__dirname, '..', 'public') }) {
   const app = express();
   app.disable('x-powered-by');
+  const page = (name) => path.join(publicDir, name);
+  const notFoundPage = (res) => res.status(404).sendFile(page('404.html'));
 
   // ---------- SEO: API responses must never be indexed ----------
   app.use('/api', (req, res, next) => {
@@ -62,7 +65,7 @@ function createApp({ repo, openWeatherKey = '', cookieSecure = false, fetchImpl 
   }
 
   async function requireAuth(req, res, next) {
-    if (!(await currentUser(req))) return next(new HttpError(401, 'Sign in required'));
+    if (!(await currentUser(req))) return next(new HttpError(401, 'Нужно войти в аккаунт'));
     next();
   }
 
@@ -70,6 +73,14 @@ function createApp({ repo, openWeatherKey = '', cookieSecure = false, fetchImpl 
     const token = newSessionToken();
     await repo.createSession(user.id, hashToken(token), new Date(Date.now() + SESSION_TTL_MS));
     res.cookie(SESSION_COOKIE, token, { httpOnly: true, sameSite: 'lax', secure: cookieSecure, maxAge: SESSION_TTL_MS, path: '/' });
+  }
+
+  // Order is visible only to its buyer and seller
+  async function loadOrderFor(req) {
+    const orderId = toInt(req.params.id);
+    const order = Number.isNaN(orderId) ? null : await repo.getOrder(orderId);
+    if (!order || (order.buyer.userId !== req.user.id && order.seller.userId !== req.user.id)) throw new HttpError(404, 'Сделка не найдена');
+    return order;
   }
 
   const api = express.Router();
@@ -83,14 +94,15 @@ function createApp({ repo, openWeatherKey = '', cookieSecure = false, fetchImpl 
 
   // ---------- Auth ----------
   api.post('/auth/register', async (req, res) => {
-    const { name, email } = validateProfile(req.body);
+    const { username, email } = validateAccount(req.body);
     const password = String(req.body?.password ?? '');
-    if (password.length < 6 || password.length > 128) throw new HttpError(400, 'Password must be 6–128 characters');
+    if (password.length < 6 || password.length > 128) throw new HttpError(400, 'Пароль: от 6 до 128 символов');
     let user;
     try {
-      user = await repo.createUser({ name, email, passwordHash: await hashPassword(password) });
+      user = await repo.createUser({ username, email, passwordHash: await hashPassword(password) });
     } catch (err) {
-      if (err.code === 'EMAIL_TAKEN') throw new HttpError(409, 'User already exists');
+      if (err.code === 'USERNAME_TAKEN') throw new HttpError(409, 'Этот логин уже занят');
+      if (err.code === 'EMAIL_TAKEN') throw new HttpError(409, 'Аккаунт с таким email уже есть');
       throw err;
     }
     await startSession(res, user);
@@ -101,7 +113,7 @@ function createApp({ repo, openWeatherKey = '', cookieSecure = false, fetchImpl 
     const email = String(req.body?.email ?? '').trim().toLowerCase();
     const password = String(req.body?.password ?? '');
     const user = email ? await repo.findUserByEmail(email) : null;
-    if (!user || !(await verifyPassword(password, user.passwordHash))) throw new HttpError(401, 'Invalid email or password');
+    if (!user || !(await verifyPassword(password, user.passwordHash))) throw new HttpError(401, 'Неверный email или пароль');
     await startSession(res, user);
     res.json({ user: publicUser(user) });
   });
@@ -121,11 +133,12 @@ function createApp({ repo, openWeatherKey = '', cookieSecure = false, fetchImpl 
 
   // ---------- Profile ----------
   api.put('/users/me', requireAuth, async (req, res) => {
-    const data = validateProfile(req.body);
+    const data = validateAccount(req.body);
     try {
       res.json({ user: publicUser(await repo.updateUser(req.user.id, data)) });
     } catch (err) {
-      if (err.code === 'EMAIL_TAKEN') throw new HttpError(409, 'Email is already used by another account');
+      if (err.code === 'USERNAME_TAKEN') throw new HttpError(409, 'Этот логин уже занят');
+      if (err.code === 'EMAIL_TAKEN') throw new HttpError(409, 'Этот email уже используется');
       throw err;
     }
   });
@@ -133,97 +146,167 @@ function createApp({ repo, openWeatherKey = '', cookieSecure = false, fetchImpl 
   api.put('/users/me/avatar', requireAuth, async (req, res) => {
     const avatar = req.body?.avatar;
     if (avatar !== null && (typeof avatar !== 'string' || !avatar.startsWith('data:image/') || avatar.length > 900_000)) {
-      throw new HttpError(400, 'Avatar must be an image data URL up to ~600 KB');
+      throw new HttpError(400, 'Аватар должен быть картинкой до ~600 КБ');
     }
     res.json({ user: publicUser(await repo.updateAvatar(req.user.id, avatar)) });
   });
 
-  api.get('/users/me/settings', requireAuth, async (req, res) => {
-    res.json(await repo.getSettings(req.user.id));
+  // Public seller profile: rating, reviews, active listings
+  api.get('/users/:username', async (req, res) => {
+    const profile = await repo.getSellerProfile(String(req.params.username));
+    if (!profile) throw new HttpError(404, 'Пользователь не найден');
+    const [reviews, listings] = await Promise.all([
+      repo.listReviews(profile.userId, 20),
+      repo.searchListings({ sellerId: profile.userId, limit: 50 }),
+    ]);
+    res.json({ ...profile, reviews, listings: listings.items });
   });
 
-  api.put('/users/me/settings', requireAuth, async (req, res) => {
-    const prev = await repo.getSettings(req.user.id);
-    const theme = req.body?.theme ?? prev.theme;
-    const units = req.body?.units ?? prev.units;
-    const language = String(req.body?.language ?? prev.language).slice(0, 5);
-    if (!['dark', 'light'].includes(theme)) throw new HttpError(400, 'theme must be dark or light');
-    if (!['metric', 'imperial'].includes(units)) throw new HttpError(400, 'units must be metric or imperial');
-    res.json(await repo.saveSettings(req.user.id, { theme, units, language }));
+  // ---------- Catalog ----------
+  api.get('/games', async (req, res) => {
+    res.json(await repo.listGames());
   });
 
-  // ---------- Favorite cities ----------
-  api.get('/favorites', requireAuth, async (req, res) => {
-    res.json(await repo.listFavorites(req.user.id));
+  api.get('/listings', async (req, res) => {
+    const limit = Math.min(toInt(req.query.limit) || 24, 100);
+    const page = Math.max(toInt(req.query.page) || 1, 1);
+    const sort = SORTS.includes(req.query.sort) ? req.query.sort : 'new';
+    const q = String(req.query.q ?? '').trim().slice(0, 100);
+    const result = await repo.searchListings({
+      game: req.query.game ? String(req.query.game) : undefined,
+      category: req.query.category ? String(req.query.category) : undefined,
+      q: q || undefined,
+      sort,
+      limit,
+      offset: (page - 1) * limit,
+    });
+    res.json({ ...result, page, limit });
   });
 
-  api.post('/favorites', requireAuth, async (req, res) => {
-    const cityId = await repo.upsertCity(validateCity(req.body));
-    await repo.addFavorite(req.user.id, cityId);
-    res.status(201).json({ cityId });
+  api.get('/listings/:id', async (req, res) => {
+    const id = toInt(req.params.id);
+    const listing = Number.isNaN(id) ? null : await repo.getListing(id);
+    if (!listing) throw new HttpError(404, 'Лот не найден');
+    res.json(listing);
   });
 
-  api.delete('/favorites/:cityId', requireAuth, async (req, res) => {
-    const cityId = Number(req.params.cityId);
-    if (!Number.isInteger(cityId)) throw new HttpError(400, 'Invalid city id');
-    if (!(await repo.removeFavorite(req.user.id, cityId))) throw new HttpError(404, 'Not in favorites');
-    res.status(204).end();
+  api.post('/listings', requireAuth, async (req, res) => {
+    const categoryId = toInt(req.body?.categoryId);
+    if (Number.isNaN(categoryId) || !(await repo.getCategory(categoryId))) throw new HttpError(400, 'Выберите игру и раздел');
+    const data = validateListing(req.body);
+    if (data.quantity < 1) throw new HttpError(400, 'Количество должно быть не меньше 1');
+    const listingId = await repo.createListing(req.user.id, { categoryId, ...data });
+    res.status(201).json({ listingId });
   });
 
-  // ---------- Search history ----------
-  api.get('/history', requireAuth, async (req, res) => {
-    res.json(await repo.listHistory(req.user.id, 10));
+  api.put('/listings/:id', requireAuth, async (req, res) => {
+    const id = toInt(req.params.id);
+    const data = validateListing(req.body);
+    const status = req.body?.status === 'closed' ? 'closed' : 'active';
+    if (Number.isNaN(id) || !(await repo.updateListing(id, req.user.id, { ...data, status }))) throw new HttpError(404, 'Лот не найден');
+    res.json(await repo.getListing(id));
   });
 
-  api.post('/history', requireAuth, async (req, res) => {
-    const cityId = await repo.upsertCity(validateCity(req.body));
-    await repo.addHistory(req.user.id, cityId);
-    res.status(201).json({ cityId });
+  api.get('/my/listings', requireAuth, async (req, res) => {
+    const { items } = await repo.searchListings({ sellerId: req.user.id, status: null, limit: 100 });
+    res.json(items);
   });
 
-  // ---------- OpenWeather proxy (the API key stays on the server) ----------
-  api.get('/ow', async (req, res) => {
-    const owPath = String(req.query.path || '');
-    if (!OW_PATHS.has(owPath)) throw new HttpError(400, 'Unsupported OpenWeather path');
-    if (!openWeatherKey) throw new HttpError(503, 'OPENWEATHER_KEY is not configured on the server');
+  // ---------- Orders (deals) ----------
+  api.post('/orders', requireAuth, async (req, res) => {
+    const listingId = toInt(req.body?.listingId);
+    const quantity = toInt(req.body?.quantity ?? 1);
+    if (Number.isNaN(listingId) || Number.isNaN(quantity)) throw new HttpError(400, 'Неверный лот или количество');
+    const orderId = await repo.createOrder(req.user.id, listingId, quantity);
+    res.status(201).json({ orderId });
+  });
 
-    const url = new URL(OPENWEATHER_BASE + owPath);
-    for (const k of OW_PARAMS) if (req.query[k] !== undefined) url.searchParams.set(k, String(req.query[k]));
-    url.searchParams.set('appid', openWeatherKey);
+  api.get('/my/orders', requireAuth, async (req, res) => {
+    res.json(await repo.listOrders(req.user.id, req.query.role === 'seller' ? 'seller' : 'buyer'));
+  });
 
-    let upstream;
+  api.get('/orders/:id', requireAuth, async (req, res) => {
+    const order = await loadOrderFor(req);
+    res.json({ ...order, messages: await repo.listMessages(order.orderId), role: order.buyer.userId === req.user.id ? 'buyer' : 'seller' });
+  });
+
+  api.post('/orders/:id/confirm', requireAuth, async (req, res) => {
+    const order = await loadOrderFor(req);
+    if (order.buyer.userId !== req.user.id) throw new HttpError(403, 'Подтвердить получение может только покупатель');
+    await repo.completeOrder(order.orderId, req.user.id);
+    res.json(await repo.getOrder(order.orderId));
+  });
+
+  api.post('/orders/:id/refund', requireAuth, async (req, res) => {
+    const order = await loadOrderFor(req);
+    if (order.seller.userId !== req.user.id) throw new HttpError(403, 'Вернуть деньги может только продавец');
+    await repo.refundOrder(order.orderId, req.user.id);
+    res.json(await repo.getOrder(order.orderId));
+  });
+
+  api.post('/orders/:id/dispute', requireAuth, async (req, res) => {
+    const order = await loadOrderFor(req);
+    if (order.buyer.userId !== req.user.id) throw new HttpError(403, 'Открыть спор может только покупатель');
+    if (!(await repo.disputeOrder(order.orderId, req.user.id))) throw new HttpError(409, 'Спор можно открыть только по оплаченной сделке');
+    res.json(await repo.getOrder(order.orderId));
+  });
+
+  api.post('/orders/:id/messages', requireAuth, async (req, res) => {
+    const order = await loadOrderFor(req);
+    const text = String(req.body?.text ?? '').trim();
+    if (!text || text.length > 1000) throw new HttpError(400, 'Сообщение: от 1 до 1000 символов');
+    await repo.addMessage(order.orderId, req.user.id, text);
+    res.status(201).json(await repo.listMessages(order.orderId));
+  });
+
+  api.post('/orders/:id/review', requireAuth, async (req, res) => {
+    const order = await loadOrderFor(req);
+    if (order.buyer.userId !== req.user.id) throw new HttpError(403, 'Отзыв оставляет покупатель');
+    if (order.status !== 'completed') throw new HttpError(409, 'Отзыв можно оставить после завершения сделки');
+    const rating = toInt(req.body?.rating);
+    const text = String(req.body?.text ?? '').trim();
+    if (!(rating >= 1 && rating <= 5)) throw new HttpError(400, 'Оценка: от 1 до 5');
+    if (text.length > 1000) throw new HttpError(400, 'Отзыв: не больше 1000 символов');
     try {
-      upstream = await fetchImpl(url, { signal: AbortSignal.timeout(8000) });
-    } catch {
-      throw new HttpError(502, 'OpenWeather is unreachable');
+      await repo.addReview(order.orderId, req.user.id, order.seller.userId, rating, text || null);
+    } catch (err) {
+      if (err.code === 'REVIEW_EXISTS') throw new HttpError(409, 'Отзыв по этой сделке уже оставлен');
+      throw err;
     }
-    const body = await upstream.json().catch(() => ({}));
-    res.status(upstream.status).json(body);
+    res.status(201).json({ ok: true });
+  });
 
-    // Save current weather into WeatherSnapshots (does not block the response).
-    if (owPath === '/data/2.5/weather' && upstream.ok && body?.main) {
-      const lat = round4(Number(req.query.lat));
-      const lon = round4(Number(req.query.lon));
-      if (Number.isFinite(lat) && Number.isFinite(lon)) {
-        repo.upsertCity({ name: body.name || `${lat}, ${lon}`, country: body.sys?.country, lat, lon })
-          .then((cityId) => repo.saveSnapshot(cityId, {
-            tempC: round4(body.main.temp - 273.15),
-            feelsLikeC: body.main.feels_like != null ? round4(body.main.feels_like - 273.15) : null,
-            humidity: body.main.humidity ?? null,
-            pressure: body.main.pressure ?? null,
-            windSpeed: body.wind?.speed ?? null,
-            description: body.weather?.[0]?.description ?? null,
-            icon: body.weather?.[0]?.icon ?? null,
-          }))
-          .catch((err) => console.warn('Snapshot not saved:', err.message));
-      }
-    }
+  // ---------- Wallet ----------
+  api.get('/wallet', requireAuth, async (req, res) => {
+    const user = await repo.findUserById(req.user.id);
+    res.json({ balance: user.balance, transactions: await repo.listTransactions(req.user.id, 50) });
+  });
+
+  // Demo top-up: there is no real payment provider in this project
+  api.post('/wallet/deposit', requireAuth, async (req, res) => {
+    const amount = money(req.body?.amount);
+    res.json({ balance: await repo.deposit(req.user.id, Number.isFinite(amount) ? amount : 0) });
   });
 
   app.use('/api', api);
   app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 
-  // ---------- Frontend ----------
+  // ---------- SEO: sitemap.xml is generated from the database ----------
+  app.get('/sitemap.xml', async (req, res) => {
+    const [games, listings] = await Promise.all([repo.listGames(), repo.searchListings({ limit: 5000 })]);
+    const urls = [
+      `${siteUrl}/`, `${siteUrl}/faq`,
+      ...games.map((g) => `${siteUrl}/games/${g.slug}`),
+      ...listings.items.map((l) => `${siteUrl}/listings/${l.listingId}`),
+    ];
+    res.type('application/xml').send(
+      '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+      + urls.map((u) => `  <url><loc>${u}</loc></url>`).join('\n')
+      + '\n</urlset>\n',
+    );
+  });
+
+  // ---------- Pages with readable URLs ----------
   // One canonical URL per page: /faq.html -> /faq, /index.html -> /
   app.use((req, res, next) => {
     if (req.method === 'GET' && req.path.endsWith('.html')) {
@@ -234,18 +317,36 @@ function createApp({ repo, openWeatherKey = '', cookieSecure = false, fetchImpl 
     }
     next();
   });
+
+  app.get('/games/:slug', async (req, res) => {
+    const games = await repo.listGames();
+    if (!games.some((g) => g.slug === req.params.slug)) return notFoundPage(res);
+    res.sendFile(page('catalog.html'));
+  });
+  app.get('/listings/:id', async (req, res) => {
+    const id = toInt(req.params.id);
+    if (Number.isNaN(id) || !(await repo.getListing(id))) return notFoundPage(res);
+    res.sendFile(page('listing.html'));
+  });
+  app.get('/users/:username', async (req, res) => {
+    if (!(await repo.getSellerProfile(String(req.params.username)))) return notFoundPage(res);
+    res.sendFile(page('user.html'));
+  });
+  app.get('/orders/:id', (req, res) => res.sendFile(page('order.html')));
+
   app.use(express.static(publicDir, { extensions: ['html'], maxAge: '1h' }));
-  app.use((req, res) => res.status(404).sendFile(path.join(publicDir, '404.html')));
+  app.use((req, res) => notFoundPage(res));
 
   // ---------- Errors ----------
   // eslint-disable-next-line no-unused-vars
   app.use((err, req, res, next) => {
-    if (err.type === 'entity.too.large') return res.status(413).json({ error: 'Request body is too large' });
-    if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'Invalid JSON' });
+    if (err.type === 'entity.too.large') return res.status(413).json({ error: 'Слишком большой запрос' });
+    if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'Некорректный JSON' });
     if (err instanceof HttpError) return res.status(err.status).json({ error: err.message });
+    if (DOMAIN_STATUS[err.number]) return res.status(DOMAIN_STATUS[err.number]).json({ error: err.message });
     const dbDown = ['ConnectionError', 'TransactionError'].includes(err.name) || ['ESOCKET', 'ELOGIN', 'ETIMEOUT'].includes(err.code);
     console.error(err);
-    res.status(dbDown ? 503 : 500).json({ error: dbDown ? 'Database is unavailable' : 'Internal server error' });
+    res.status(dbDown ? 503 : 500).json({ error: dbDown ? 'База данных недоступна' : 'Внутренняя ошибка сервера' });
   });
 
   return app;

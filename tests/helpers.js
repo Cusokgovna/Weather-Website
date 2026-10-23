@@ -1,23 +1,8 @@
-// Starts the app on a random port with the given repository and a fake OpenWeather.
+// Starts the app on a random port and provides a cookie-keeping HTTP client.
 const { createApp } = require('../server/app');
 
-// Fake OpenWeather: returns fixed JSON depending on the requested path
-async function fakeOpenWeather(url) {
-  const u = new URL(url);
-  if (u.searchParams.get('appid') !== 'test-key') return Response.json({ message: 'Invalid API key' }, { status: 401 });
-  if (u.pathname === '/data/2.5/weather') {
-    return Response.json({
-      name: 'Novosibirsk', sys: { country: 'RU' },
-      main: { temp: 273.15 + 5, feels_like: 273.15 + 2, humidity: 60, pressure: 1015 },
-      wind: { speed: 3 }, weather: [{ description: 'clear sky', icon: '01d' }],
-    });
-  }
-  if (u.pathname === '/geo/1.0/direct') return Response.json([{ name: 'Novosibirsk', country: 'RU', lat: 55.0282171, lon: 82.9234509 }]);
-  return Response.json({});
-}
-
 async function startServer(repo, opts = {}) {
-  const app = createApp({ repo, openWeatherKey: 'test-key', fetchImpl: fakeOpenWeather, ...opts });
+  const app = createApp({ repo, ...opts });
   const server = await new Promise((resolve) => { const s = app.listen(0, () => resolve(s)); });
   const base = `http://127.0.0.1:${server.address().port}`;
 
@@ -43,88 +28,164 @@ async function startServer(repo, opts = {}) {
   return { base, client, close: () => new Promise((r) => server.close(r)) };
 }
 
-// Shared API contract: the same checks run against the memory repo and against real SQL Server.
-function apiContract(t, getCtx) {
-  const unique = `u${Date.now()}${Math.floor(Math.random() * 1000)}@example.com`;
+// Shared API contract: the same scenarios run against the memory repo and against real SQL Server.
+// Every run creates its own users, so it also works on a database with seed data.
+function apiContract(getCtx) {
+  const tag = `${Date.now().toString(36)}${Math.floor(Math.random() * 1e4)}`;
+  const account = (role) => ({ username: `${role}_${tag}`, email: `${role}.${tag}@example.com`, password: 'secret123' });
+
+  async function signUp(role) {
+    const req = getCtx().client();
+    const r = await req('/api/auth/register', { method: 'POST', body: account(role) });
+    if (r.status !== 201) throw new Error(`register ${role}: ${r.status} ${r.text}`);
+    return req;
+  }
+
+  async function categoryId(req, game, slug) {
+    const games = (await req('/api/games')).json;
+    return games.find((g) => g.slug === game).categories.find((c) => c.slug === slug).categoryId;
+  }
 
   return [
-    ['register → me → logout → login', async (assert) => {
+    ['auth: register, duplicates, me, logout, login', async (assert) => {
       const req = getCtx().client();
-      let r = await req('/api/auth/register', { method: 'POST', body: { name: 'Tester', email: unique, password: 'secret123' } });
+      const acc = account('auth');
+      let r = await req('/api/auth/register', { method: 'POST', body: acc });
       assert.equal(r.status, 201);
-      assert.equal(r.json.user.email, unique);
+      assert.equal(r.json.user.username, acc.username);
+      assert.equal(r.json.user.balance, 0);
       assert.equal(r.json.user.passwordHash, undefined, 'password hash must not leak');
 
-      r = await req('/api/auth/me');
-      assert.equal(r.status, 200);
-      assert.equal(r.json.user.name, 'Tester');
+      r = await getCtx().client()('/api/auth/register', { method: 'POST', body: { ...acc, email: 'other' + acc.email } });
+      assert.equal(r.status, 409, 'username taken');
+      r = await getCtx().client()('/api/auth/register', { method: 'POST', body: { ...acc, username: acc.username + 'x' } });
+      assert.equal(r.status, 409, 'email taken');
+      r = await getCtx().client()('/api/auth/register', { method: 'POST', body: { ...acc, username: 'bad name!' } });
+      assert.equal(r.status, 400);
 
-      r = await req('/api/auth/register', { method: 'POST', body: { name: 'Tester', email: unique, password: 'secret123' } });
-      assert.equal(r.status, 409, 'duplicate email');
-
-      r = await req('/api/auth/logout', { method: 'POST' });
-      assert.equal(r.status, 204);
-      r = await req('/api/auth/me');
-      assert.equal(r.status, 200);
-      assert.equal(r.json.user, null, 'signed out');
-
-      r = await req('/api/auth/login', { method: 'POST', body: { email: unique, password: 'wrong-pass' } });
-      assert.equal(r.status, 401);
-      r = await req('/api/auth/login', { method: 'POST', body: { email: unique.toUpperCase(), password: 'secret123' } });
-      assert.equal(r.status, 200);
+      assert.equal((await req('/api/auth/me')).json.user.email, acc.email);
+      assert.equal((await req('/api/auth/logout', { method: 'POST' })).status, 204);
+      assert.equal((await req('/api/auth/me')).json.user, null);
+      assert.equal((await req('/api/auth/login', { method: 'POST', body: { email: acc.email, password: 'wrong-pass' } })).status, 401);
+      assert.equal((await req('/api/auth/login', { method: 'POST', body: { email: acc.email.toUpperCase(), password: acc.password } })).status, 200);
     }],
 
-    ['profile, settings, favorites and history', async (assert) => {
-      const req = getCtx().client();
-      const email = 'p' + unique;
-      await req('/api/auth/register', { method: 'POST', body: { name: 'Profile', email, password: 'secret123' } });
+    ['marketplace: listing → purchase → chat → confirm → review', async (assert) => {
+      const seller = await signUp('seller');
+      const buyer = await signUp('buyer');
+      const stranger = await signUp('stranger');
+      const catId = await categoryId(seller, 'cs2', 'skins');
 
-      let r = await req('/api/users/me', { method: 'PUT', body: { name: 'Renamed', email } });
-      assert.equal(r.status, 200);
-      assert.equal(r.json.user.name, 'Renamed');
+      // validation
+      assert.equal((await seller('/api/listings', { method: 'POST', body: { categoryId: 999999, title: 'Test', price: 10, quantity: 1 } })).status, 400);
+      assert.equal((await seller('/api/listings', { method: 'POST', body: { categoryId: catId, title: 'Test', price: 0, quantity: 1 } })).status, 400);
 
-      r = await req('/api/users/me/avatar', { method: 'PUT', body: { avatar: 'data:image/png;base64,AAAA' } });
-      assert.equal(r.json.user.avatar, 'data:image/png;base64,AAAA');
-      r = await req('/api/users/me/avatar', { method: 'PUT', body: { avatar: 'javascript:alert(1)' } });
-      assert.equal(r.status, 400);
-
-      r = await req('/api/users/me/settings', { method: 'PUT', body: { theme: 'light' } });
-      assert.equal(r.json.theme, 'light');
-      r = await req('/api/users/me/settings', { method: 'PUT', body: { theme: 'pink' } });
-      assert.equal(r.status, 400);
-
-      const city = { name: 'Novosibirsk', country: 'ru', lat: 55.0282171, lon: 82.9234509 };
-      r = await req('/api/favorites', { method: 'POST', body: city });
+      const title = `M4A4 Howl ${tag}`;
+      let r = await seller('/api/listings', { method: 'POST', body: { categoryId: catId, title, description: 'FN', price: 1000, quantity: 3 } });
       assert.equal(r.status, 201);
-      const { cityId } = r.json;
-      r = await req('/api/favorites', { method: 'POST', body: city });
-      assert.equal(r.json.cityId, cityId, 'same coordinates → same city');
+      const { listingId } = r.json;
 
-      r = await req('/api/favorites');
-      assert.equal(r.json.length, 1);
-      assert.equal(r.json[0].country, 'RU');
-      assert.equal(r.json[0].lat, 55.0282);
+      r = await buyer(`/api/listings?game=cs2&category=skins&q=${encodeURIComponent(tag)}`);
+      assert.equal(r.json.total, 1);
+      assert.equal(r.json.items[0].seller.username, `seller_${tag}`);
+      r = await buyer(`/api/listings/${listingId}`);
+      assert.equal(r.json.game.slug, 'cs2');
+      assert.equal(r.json.price, 1000);
 
-      r = await req('/api/history', { method: 'POST', body: city });
+      // money rules (stored procedure usp_CreateOrder)
+      r = await buyer('/api/orders', { method: 'POST', body: { listingId, quantity: 2 } });
+      assert.equal(r.status, 409, 'not enough money');
+      assert.match(r.json.error, /Недостаточно средств/);
+      r = await buyer('/api/wallet/deposit', { method: 'POST', body: { amount: 5000 } });
+      assert.equal(r.json.balance, 5000);
+      assert.equal((await buyer('/api/wallet/deposit', { method: 'POST', body: { amount: -5 } })).status, 400);
+      assert.equal((await seller('/api/orders', { method: 'POST', body: { listingId, quantity: 1 } })).status, 400, 'own listing');
+      assert.equal((await buyer('/api/orders', { method: 'POST', body: { listingId, quantity: 4 } })).status, 409, 'too many');
+
+      r = await buyer('/api/orders', { method: 'POST', body: { listingId, quantity: 2 } });
       assert.equal(r.status, 201);
-      r = await req('/api/history');
-      assert.equal(r.json.length, 1);
-      assert.equal(r.json[0].name, 'Novosibirsk');
+      const { orderId } = r.json;
+      assert.equal((await buyer('/api/wallet')).json.balance, 3000);
+      assert.equal((await buyer(`/api/listings/${listingId}`)).json.quantity, 1);
 
-      r = await req(`/api/favorites/${cityId}`, { method: 'DELETE' });
-      assert.equal(r.status, 204);
-      r = await req(`/api/favorites/${cityId}`, { method: 'DELETE' });
-      assert.equal(r.status, 404);
+      // order is private to its participants
+      assert.equal((await stranger(`/api/orders/${orderId}`)).status, 404);
+      r = await seller(`/api/orders/${orderId}`);
+      assert.equal(r.json.role, 'seller');
+      assert.equal(r.json.totalPrice, 2000);
+      assert.equal(r.json.status, 'paid');
+      assert.equal((await seller('/api/my/orders?role=seller')).json[0].orderId, orderId);
 
-      r = await req('/api/favorites', { method: 'POST', body: { name: 'Nowhere', lat: 200, lon: 0 } });
-      assert.equal(r.status, 400);
+      // chat
+      await seller(`/api/orders/${orderId}/messages`, { method: 'POST', body: { text: 'Трейд отправлен' } });
+      r = await buyer(`/api/orders/${orderId}/messages`, { method: 'POST', body: { text: 'Получил, спасибо' } });
+      assert.deepEqual(r.json.map((m) => m.text), ['Трейд отправлен', 'Получил, спасибо']);
+      assert.equal((await buyer(`/api/orders/${orderId}/messages`, { method: 'POST', body: { text: '  ' } })).status, 400);
+
+      // confirm → seller gets money
+      assert.equal((await buyer(`/api/orders/${orderId}/review`, { method: 'POST', body: { rating: 5 } })).status, 409, 'review before completion');
+      assert.equal((await seller(`/api/orders/${orderId}/confirm`, { method: 'POST' })).status, 403);
+      r = await buyer(`/api/orders/${orderId}/confirm`, { method: 'POST' });
+      assert.equal(r.json.status, 'completed');
+      assert.equal((await seller('/api/wallet')).json.balance, 2000);
+      assert.equal((await buyer(`/api/orders/${orderId}/confirm`, { method: 'POST' })).status, 409, 'already closed');
+
+      assert.equal((await buyer(`/api/orders/${orderId}/review`, { method: 'POST', body: { rating: 6 } })).status, 400);
+      assert.equal((await buyer(`/api/orders/${orderId}/review`, { method: 'POST', body: { rating: 5, text: 'Супер' } })).status, 201);
+      assert.equal((await buyer(`/api/orders/${orderId}/review`, { method: 'POST', body: { rating: 4 } })).status, 409, 'one review per order');
+
+      r = await stranger(`/api/users/seller_${tag}`);
+      assert.equal(r.json.salesCount, 1);
+      assert.equal(r.json.avgRating, 5);
+      assert.equal(r.json.reviews[0].text, 'Супер');
+      assert.equal(r.json.listings.length, 1);
+    }],
+
+    ['marketplace: dispute → refund returns money and stock; last item → sold', async (assert) => {
+      const seller = await signUp('seller2');
+      const buyer = await signUp('buyer2');
+      const catId = await categoryId(seller, 'wow', 'gold');
+      const { listingId } = (await seller('/api/listings', { method: 'POST', body: { categoryId: catId, title: `Gold ${tag}`, price: 250.5, quantity: 1 } })).json;
+      await buyer('/api/wallet/deposit', { method: 'POST', body: { amount: 1000 } });
+
+      const { orderId } = (await buyer('/api/orders', { method: 'POST', body: { listingId } })).json;
+      assert.equal((await buyer(`/api/listings/${listingId}`)).json.status, 'sold');
+      assert.equal((await buyer(`/api/listings?q=${encodeURIComponent('Gold ' + tag)}`)).json.total, 0, 'sold lots are hidden');
+
+      assert.equal((await buyer(`/api/orders/${orderId}/dispute`, { method: 'POST' })).json.status, 'disputed');
+      assert.equal((await buyer(`/api/orders/${orderId}/refund`, { method: 'POST' })).status, 403);
+      assert.equal((await seller(`/api/orders/${orderId}/refund`, { method: 'POST' })).json.status, 'refunded');
+
+      const wallet = (await buyer('/api/wallet')).json;
+      assert.equal(wallet.balance, 1000);
+      assert.deepEqual(wallet.transactions.map((t) => t.type), ['refund', 'purchase', 'deposit']);
+      const listing = (await buyer(`/api/listings/${listingId}`)).json;
+      assert.equal(listing.status, 'active');
+      assert.equal(listing.quantity, 1);
+    }],
+
+    ['listings: only the owner can edit; closed lots disappear from the catalog', async (assert) => {
+      const seller = await signUp('seller3');
+      const other = await signUp('other3');
+      const catId = await categoryId(seller, 'roblox', 'robux');
+      const body = { categoryId: catId, title: `Robux ${tag}`, price: 100, quantity: 10 };
+      const { listingId } = (await seller('/api/listings', { method: 'POST', body })).json;
+
+      assert.equal((await other(`/api/listings/${listingId}`, { method: 'PUT', body: { ...body, price: 1 } })).status, 404);
+      let r = await seller(`/api/listings/${listingId}`, { method: 'PUT', body: { ...body, price: 90 } });
+      assert.equal(r.json.price, 90);
+      r = await seller(`/api/listings/${listingId}`, { method: 'PUT', body: { ...body, status: 'closed' } });
+      assert.equal(r.json.status, 'closed');
+      assert.equal((await other(`/api/listings?q=${encodeURIComponent('Robux ' + tag)}`)).json.total, 0);
+      assert.equal((await seller('/api/my/listings')).json[0].status, 'closed', 'owner still sees it');
     }],
 
     ['protected endpoints require sign in', async (assert) => {
       const req = getCtx().client();
-      for (const path of ['/api/favorites', '/api/history', '/api/users/me/settings']) {
+      for (const path of ['/api/wallet', '/api/my/orders', '/api/my/listings', '/api/orders/1']) {
         assert.equal((await req(path)).status, 401, path);
       }
+      assert.equal((await req('/api/orders', { method: 'POST', body: { listingId: 1 } })).status, 401);
     }],
   ];
 }

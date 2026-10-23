@@ -5,88 +5,41 @@ const { createMemoryRepo } = require('../server/memoryRepo');
 const { startServer, apiContract } = require('./helpers');
 
 let ctx;
-let repo;
-before(async () => { repo = createMemoryRepo(); ctx = await startServer(repo); });
+before(async () => { ctx = await startServer(createMemoryRepo({ demoData: true }), { siteUrl: 'https://kraken.example' }); });
 after(() => ctx.close());
 
-for (const [name, fn] of apiContract(test, () => ctx)) test(name, () => fn(assert));
+for (const [name, fn] of apiContract(() => ctx)) test(name, () => fn(assert));
 
 test('API responses carry X-Robots-Tag: noindex, nofollow', async () => {
-  const r = await ctx.client()('/api/health');
-  assert.equal(r.status, 200);
-  assert.equal(r.headers.get('x-robots-tag'), 'noindex, nofollow');
-  assert.equal((await ctx.client()('/api/unknown')).headers.get('x-robots-tag'), 'noindex, nofollow');
-});
-
-test('OpenWeather proxy hides the key and saves a weather snapshot', async () => {
   const req = ctx.client();
-  let r = await req('/api/ow?path=/data/2.5/weather&lat=55.0282171&lon=82.9234509');
-  assert.equal(r.status, 200);
-  assert.equal(r.json.name, 'Novosibirsk');
-  await new Promise((res) => setTimeout(res, 20)); // snapshot is saved in background
-  const snap = repo._db.snapshots.at(-1);
-  assert.equal(snap.tempC, 5);
-  assert.equal(snap.description, 'clear sky');
-
-  r = await req('/api/ow?path=/data/3.0/onecall&lat=1&lon=1');
-  assert.equal(r.status, 400, 'only whitelisted OpenWeather paths');
-});
-
-test('proxy reports a missing API key', async () => {
-  const noKey = await startServer(createMemoryRepo(), { openWeatherKey: '' });
-  try {
-    const r = await noKey.client()('/api/ow?path=/data/2.5/weather&lat=1&lon=1');
-    assert.equal(r.status, 503);
-  } finally {
-    await noKey.close();
+  for (const path of ['/api/health', '/api/games', '/api/unknown']) {
+    assert.equal((await req(path)).headers.get('x-robots-tag'), 'noindex, nofollow', path);
   }
 });
 
-test('robots.txt and sitemap.xml are served as files, not as the home page', async () => {
+test('catalog: games with categories, search, sorting, paging', async () => {
   const req = ctx.client();
-  const robots = await req('/robots.txt');
-  assert.equal(robots.status, 200);
-  assert.match(robots.headers.get('content-type'), /text\/plain/);
-  assert.match(robots.text, /Disallow: \/profile/);
-  assert.match(robots.text, /Disallow: \/api\//);
-  assert.match(robots.text, /Sitemap: https:\/\/example\.com\/sitemap\.xml/);
+  const games = (await req('/api/games')).json;
+  assert.deepEqual(games.map((g) => g.slug), ['cs2', 'dota2', 'genshin', 'wow', 'roblox', 'steam']);
+  const cs2 = games.find((g) => g.slug === 'cs2');
+  assert.ok(cs2.activeListings >= 2);
+  assert.ok(cs2.categories.some((c) => c.slug === 'skins' && c.kind === 'item'));
 
-  const sitemap = await req('/sitemap.xml');
-  assert.equal(sitemap.status, 200);
-  assert.match(sitemap.headers.get('content-type'), /xml/);
-  assert.match(sitemap.text, /<loc>https:\/\/example\.com\/<\/loc>/);
-  assert.match(sitemap.text, /<loc>https:\/\/example\.com\/faq<\/loc>/);
-  assert.doesNotMatch(sitemap.text, /profile/, 'closed pages are not in the sitemap');
+  const asc = (await req('/api/listings?game=cs2&sort=price_asc')).json.items.map((l) => l.price);
+  assert.deepEqual(asc, [...asc].sort((a, b) => a - b));
+  assert.equal((await req('/api/listings?q=redline')).json.items[0].title, 'AK-47 | Redline (Field-Tested)', 'case-insensitive search');
+  const page = (await req('/api/listings?limit=2&page=2')).json;
+  assert.equal(page.items.length, 2);
+  assert.equal(page.page, 2);
+  assert.equal((await req('/api/listings/999999')).status, 404);
+  assert.equal((await req('/api/users/nobody_here')).status, 404);
 });
 
-test('pages: lang, title, description, exactly one <h1>; profile is noindex', async () => {
-  const req = ctx.client();
-  const titles = new Set();
-  for (const path of ['/', '/faq', '/profile']) {
-    const r = await req(path);
-    assert.equal(r.status, 200, path);
-    assert.match(r.text, /<html lang="en">/, path);
-    assert.match(r.text, /<meta charset="utf-8"/, path);
-    assert.match(r.text, /<meta name="viewport"/, path);
-    assert.match(r.text, /<meta name="description" content=".{50,}"/, path);
-    assert.equal((r.text.match(/<h1[\s>]/g) || []).length, 1, `${path}: one h1`);
-    titles.add(r.text.match(/<title>(.*)<\/title>/)[1]);
-  }
-  assert.equal(titles.size, 3, 'every page has its own title');
-  assert.match((await req('/profile')).text, /<meta name="robots" content="noindex"/);
-  assert.doesNotMatch((await req('/')).text, /noindex/);
-});
-
-test('clean URLs: .html redirects, unknown pages return 404', async () => {
-  const req = ctx.client();
-  let r = await req('/faq.html');
-  assert.equal(r.status, 301);
-  assert.equal(r.headers.get('location'), '/faq');
-  r = await req('/index.html');
-  assert.equal(r.headers.get('location'), '/');
-  r = await req('//evil.com/x.html');
-  assert.equal(r.headers.get('location'), '/evil.com/x', 'no open redirect');
-  r = await req('/no-such-page');
-  assert.equal(r.status, 404);
-  assert.match(r.text, /noindex/);
+test('sitemap.xml is generated from games and active listings', async () => {
+  const r = await ctx.client()('/sitemap.xml');
+  assert.equal(r.status, 200);
+  assert.match(r.headers.get('content-type'), /xml/);
+  assert.match(r.text, /<loc>https:\/\/kraken\.example\/<\/loc>/);
+  assert.match(r.text, /<loc>https:\/\/kraken\.example\/games\/cs2<\/loc>/);
+  assert.match(r.text, /<loc>https:\/\/kraken\.example\/listings\/\d+<\/loc>/);
 });

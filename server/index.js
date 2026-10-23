@@ -4,15 +4,14 @@ const { createApp } = require('./app');
 const { createMssqlRepo } = require('./mssqlRepo');
 const { createMemoryRepo } = require('./memoryRepo');
 
-const repo = config.dbDriver === 'memory' ? createMemoryRepo() : createMssqlRepo(config.db);
+const repo = config.dbDriver === 'memory' ? createMemoryRepo({ demoData: true }) : createMssqlRepo(config.db);
 
-if (!config.openWeatherKey) console.warn('WARNING: OPENWEATHER_KEY is not set — weather requests will fail (see .env.example).');
-if (repo.kind === 'memory') console.warn('WARNING: DB_DRIVER=memory — data is kept in RAM and lost on restart.');
+if (repo.kind === 'memory') console.warn('WARNING: DB_DRIVER=memory — demo data is kept in RAM and lost on restart.');
 
-const app = createApp({ repo, openWeatherKey: config.openWeatherKey, cookieSecure: config.cookieSecure });
+const app = createApp({ repo, cookieSecure: config.cookieSecure, siteUrl: config.siteUrl });
 
 const server = app.listen(config.port, () => {
-  console.log(`Weather website: http://localhost:${config.port}`);
+  console.log(`Kraken Shop: http://localhost:${config.port}`);
   repo.ping()
     .then(() => console.log(`Database (${repo.kind}) connected`))
     .catch((err) => console.error(`Database (${repo.kind}) is NOT reachable: ${err.message}`));
